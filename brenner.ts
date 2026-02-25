@@ -1827,9 +1827,15 @@ async function compileSessionArtifact(args: {
 
   for (const message of thread.messages) {
     if (typeof message.body_md !== "string" || message.body_md.trim().length === 0) continue;
-    const parsed = parseDeltaMessage(message.body_md);
     const subjectType = parseSubjectType(message.subject).type;
-    if (subjectType === "delta" && parsed.totalBlocks === 0) {
+
+    // Only parse delta blocks from messages with DELTA[...]: subjects.
+    // Non-delta messages (KICKOFF, NUDGE, PATCH, etc.) may contain example
+    // ```delta fences that should NOT be compiled as real operations.
+    if (subjectType !== "delta") continue;
+
+    const parsed = parseDeltaMessage(message.body_md);
+    if (parsed.totalBlocks === 0) {
       const bodyPreview = message.body_md.trim().slice(0, 240);
       deltaFenceErrors.push({
         message_id: message.id,

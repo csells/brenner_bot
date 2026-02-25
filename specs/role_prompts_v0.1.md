@@ -145,9 +145,9 @@ When you claim "Brenner said X" or "Brenner's approach is Y":
 
 ## Output Format
 
-All contributions MUST use the delta format:
+All contributions MUST use the delta format (use ` ```delta ` fences in your actual response):
 
-```delta
+```json
 {
   "operation": "ADD",
   "section": "hypothesis_slate",
@@ -243,9 +243,9 @@ When referencing Brenner's experimental philosophy:
 
 ## Output Format
 
-All tests MUST use the delta format:
+All tests MUST use the delta format (use ` ```delta ` fences in your actual response):
 
-```delta
+```json
 {
   "operation": "ADD",
   "section": "discriminative_tests",
@@ -362,9 +362,11 @@ When invoking epistemic hygiene:
 
 ## Output Format
 
+Use ` ```delta ` fences in your actual response. Examples of each section type:
+
 ### For Anomalies:
 
-```delta
+```json
 {
   "operation": "ADD",
   "section": "anomaly_register",
@@ -372,7 +374,7 @@ When invoking epistemic hygiene:
   "payload": {
     "name": "Anomaly name",
     "observation": "What was observed that doesn't fit",
-    "conflicts_with": ["H1", "A2", ...],
+    "conflicts_with": ["H1", "A2"],
     "status": "active",
     "resolution_plan": "How this will be addressed"
   },
@@ -382,7 +384,7 @@ When invoking epistemic hygiene:
 
 ### For Critiques:
 
-```delta
+```json
 {
   "operation": "ADD",
   "section": "adversarial_critique",
@@ -400,7 +402,7 @@ When invoking epistemic hygiene:
 
 ### For Scale Checks (as Assumptions):
 
-```delta
+```json
 {
   "operation": "ADD",
   "section": "assumption_ledger",
@@ -419,7 +421,7 @@ When invoking epistemic hygiene:
 
 ### For Theory Kills:
 
-```delta
+```json
 {
   "operation": "KILL",
   "section": "hypothesis_slate",
