@@ -297,7 +297,7 @@ function deepClone<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj)) as T;
 }
 
-const SYSTEM_ITEM_FIELDS = new Set(["id", "killed", "killed_by", "killed_at", "kill_reason"]);
+const SYSTEM_ITEM_FIELDS = new Set(["id", "killed", "killed_by", "killed_at", "kill_reason", "reason"]);
 const FORBIDDEN_PAYLOAD_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 /**
@@ -307,7 +307,6 @@ const FORBIDDEN_PAYLOAD_KEYS = new Set(["__proto__", "constructor", "prototype"]
 const FIELD_ALIASES: Record<string, string> = {
   title: "name",
   protocol: "procedure",
-  kill_reason: "reason",
   methodology: "procedure",
   rationale: "reason",
 };
