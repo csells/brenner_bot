@@ -300,6 +300,73 @@ function deepClone<T>(obj: T): T {
 const SYSTEM_ITEM_FIELDS = new Set(["id", "killed", "killed_by", "killed_at", "kill_reason"]);
 const FORBIDDEN_PAYLOAD_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
+/**
+ * Common field name aliases that LLM agents produce instead of the canonical names.
+ * The compiler applies these before processing so agents don't need to memorize
+ * exact field names. Maps wrong_name → correct_name per section.
+ */
+const FIELD_ALIASES: Record<string, Record<string, string>> = {
+  discriminative_tests: {
+    title: "name",
+    protocol: "procedure",
+    test_procedure: "procedure",
+    separates: "discriminates",
+    hypotheses: "discriminates",
+    predicted_outcomes: "expected_outcomes",
+    rubric_score: "score",
+    rubric: "score",
+    evidence_per_week_score: "score",
+    chastity_control: "potency_check",
+    impotence_control: "potency_check",
+  },
+  hypothesis_slate: {
+    title: "name",
+    hypothesis: "claim",
+    kill_reason: "reason",
+  },
+  assumption_ledger: {
+    title: "name",
+    assumption: "statement",
+    test_method: "test",
+    check: "test",
+  },
+  anomaly_register: {
+    title: "name",
+    conflicts: "conflicts_with",
+    quarantine_status: "status",
+  },
+  adversarial_critique: {
+    title: "name",
+    critique: "attack",
+    type: "current_status",
+  },
+  research_thread: {
+    question: "statement",
+  },
+};
+
+/**
+ * Normalize payload field names using known aliases.
+ * Only renames a field if the canonical name is NOT already present in the payload,
+ * to avoid overwriting an explicitly provided canonical value.
+ */
+function normalizePayloadFields(
+  section: string,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const aliases = FIELD_ALIASES[section];
+  if (!aliases) return payload;
+
+  const result = { ...payload };
+  for (const [wrongName, correctName] of Object.entries(aliases)) {
+    if (wrongName in result && !(correctName in result)) {
+      result[correctName] = result[wrongName];
+      delete result[wrongName];
+    }
+  }
+  return result;
+}
+
 function isForbiddenPayloadKey(key: string): boolean {
   return FORBIDDEN_PAYLOAD_KEYS.has(key);
 }
@@ -451,8 +518,11 @@ function applyAdd(
     return false;
   }
 
+  // Normalize common field name aliases (e.g. title→name, protocol→procedure)
+  const normalizedPayload = normalizePayloadFields(section, payload as Record<string, unknown>);
+
   const sanitizedPayload: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(payload)) {
+  for (const [key, value] of Object.entries(normalizedPayload)) {
     if (SYSTEM_ITEM_FIELDS.has(key)) continue;
     if (isForbiddenPayloadKey(key)) {
       warnings.push({
@@ -502,8 +572,11 @@ function applyEdit(
         return false;
       }
 
+      // Normalize common field name aliases
+      const normalizedPayload = normalizePayloadFields(section, payload as Record<string, unknown>);
+
       const sanitizedPayload: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(payload)) {
+      for (const [key, value] of Object.entries(normalizedPayload)) {
         if (SYSTEM_ITEM_FIELDS.has(key)) continue;
         if (isForbiddenPayloadKey(key)) {
           warnings.push({
@@ -583,9 +656,11 @@ function applyEdit(
 
   // Merge payload fields
   if (isRecord(payload)) {
-    const shouldReplace = (payload as Record<string, unknown>).replace === true;
+    // Normalize common field name aliases
+    const normalizedEditPayload = normalizePayloadFields(section, payload as Record<string, unknown>);
+    const shouldReplace = normalizedEditPayload.replace === true;
     const itemRecord = item as unknown as Record<string, unknown>;
-    for (const [key, value] of Object.entries(payload)) {
+    for (const [key, value] of Object.entries(normalizedEditPayload)) {
       if (key === "replace") continue;
       if (SYSTEM_ITEM_FIELDS.has(key)) continue;
       if (isForbiddenPayloadKey(key)) {

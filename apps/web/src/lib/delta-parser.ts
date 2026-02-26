@@ -260,12 +260,24 @@ function validateDelta(raw: unknown, rawJson: string): ParsedDelta {
     };
   }
 
-  // Validate KILL has reason
+  // Validate KILL has reason (accept 'kill_reason' as alias for 'reason')
   if (operation === "KILL") {
-    if (!isRecord(payload) || typeof payload.reason !== "string") {
+    if (!isRecord(payload)) {
       return {
         valid: false,
         error: "KILL operation requires payload with 'reason' string",
+        raw: rawJson,
+      };
+    }
+    // Normalize: agents often use 'kill_reason' instead of 'reason'
+    if (typeof payload.kill_reason === "string" && typeof payload.reason !== "string") {
+      payload.reason = payload.kill_reason;
+      delete payload.kill_reason;
+    }
+    if (typeof payload.reason !== "string") {
+      return {
+        valid: false,
+        error: "KILL operation requires payload with 'reason' string (or 'kill_reason')",
         raw: rawJson,
       };
     }
