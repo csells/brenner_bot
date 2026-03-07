@@ -7923,6 +7923,81 @@ Rules:
       bluelakePrompt      = messages.find((m) => m.to === "BlueLake")!.body;
       redforestPrompt     = messages.find((m) => m.to === "RedForest")!.body;
       greenmountainPrompt = messages.find((m) => m.to === "GreenMountain")!.body;
+
+      // Append robot-mode output format instructions to kickoff prompts.
+      // composeKickoffMessages uses the Beads/Agent Mail format which lacks
+      // the delta JSON examples needed for Codex and Gemini to produce valid output.
+      const robotFormatAppendix = `
+
+## Output Format (Robot Mode)
+
+Respond ONLY with delta blocks. Each delta is a JSON object in a \`\`\`delta fence.
+One JSON object per fence. No arrays. No prose outside the delta blocks.
+
+Valid operations: ADD (target_id: null), EDIT (target_id required), KILL (target_id required).
+Valid sections: hypothesis_slate, discriminative_tests, assumption_ledger, anomaly_register,
+  adversarial_critique, research_thread, predictions_table.
+
+The compiler assigns IDs (H1, H2, T1, A1, C1, etc.). Do not invent your own IDs.
+For KILL, use the "reason" field (not "kill_reason").
+
+Example ADD (hypothesis):
+\`\`\`delta
+{
+  "operation": "ADD",
+  "section": "hypothesis_slate",
+  "target_id": null,
+  "payload": {
+    "name": "Short descriptive name",
+    "claim": "One falsifiable sentence.",
+    "mechanism": "Causal story explaining why it would be true.",
+    "anchors": ["[inference]"],
+    "third_alternative": false
+  },
+  "rationale": "Why this hypothesis is worth testing."
+}
+\`\`\`
+
+Example ADD (adversarial critique):
+\`\`\`delta
+{
+  "operation": "ADD",
+  "section": "adversarial_critique",
+  "target_id": null,
+  "payload": {
+    "attack": "What assumption or hypothesis is being challenged.",
+    "evidence": "Why the assumption may be wrong.",
+    "real_third_alternative": false
+  },
+  "rationale": "Why this critique is discriminative."
+}
+\`\`\`
+
+Example EDIT:
+\`\`\`delta
+{
+  "operation": "EDIT",
+  "section": "research_thread",
+  "target_id": "RT",
+  "payload": { "statement": "Updated framing after new evidence." },
+  "rationale": "[inference]"
+}
+\`\`\`
+
+Example KILL:
+\`\`\`delta
+{
+  "operation": "KILL",
+  "section": "hypothesis_slate",
+  "target_id": "H1",
+  "payload": { "reason": "Fails T2: mechanism requires X but X is ruled out by Y." },
+  "rationale": "[inference from test results]"
+}
+\`\`\`
+`;
+      bluelakePrompt      += robotFormatAppendix;
+      redforestPrompt     += robotFormatAppendix;
+      greenmountainPrompt += robotFormatAppendix;
     } else {
       const ROUND_INSTRUCTIONS: Record<number, string> = {
         2: `This is Round 2. Review other agents' findings from Round 1 (shown in the artifact below).
