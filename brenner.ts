@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { spawnSync } from "node:child_process";
 
 // Shared modules from web lib (bundled by Bun)
 import { AgentMailClient } from "./apps/web/src/lib/agentMail";
@@ -30,7 +31,7 @@ import {
   type AgentRole,
   type KickoffConfig,
 } from "./apps/web/src/lib/session-kickoff";
-import { parseDeltaMessage, type ValidDelta } from "./apps/web/src/lib/delta-parser";
+import { parseDeltaMessage, extractValidDeltas, type ValidDelta } from "./apps/web/src/lib/delta-parser";
 import {
   createEmptyArtifact,
   formatLintReportHuman,
@@ -1474,6 +1475,15 @@ Commands:
   session nudge [--project-key <abs-path>] --thread-id <id> [--sender <AgentName>] --to <A,B>
                [--operator <s>] [--ack-required] [--dry-run] [--json]
   session diagnose [--project-key <abs-path>] --thread-id <id> [--json]
+  session robot --session-dir <path> --question <s>
+               [--context-file <path>] [--excerpt-file <path>] [--max-rounds <n>]
+               [--claude-bin <path>] [--codex-bin <path>] [--gemini-bin <path>]
+
+    Robot mode: fully automated, no Agent Mail required. Three agents run as pure
+    CLI subprocesses (Claude, Codex, Gemini). Each round: prompts are built from
+    the current artifact state, agents are invoked sequentially, deltas are parsed
+    and merged, the artifact is linted and auto-patched. Session converges when
+    kill-rate exceeds add-rate and all structural constraints are satisfied.
 
     By default, sends role-specific prompts to each recipient using name heuristics:
       - Codex/GPT → Hypothesis Generator
@@ -7296,6 +7306,883 @@ ${JSON.stringify(delta, null, 2)}
     }
 
     process.exit(result.summary.issues > 0 ? 1 : 0);
+  }
+
+  // ============================================================================
+  // Session Robot Command — fully automated, no Agent Mail
+  // ============================================================================
+  if (normalizedTop === "session" && sub === "robot") {
+    const sessionDirRaw = asStringFlag(flags, "session-dir");
+    if (!sessionDirRaw) throw new Error("Missing --session-dir.");
+    const sessionDir = resolve(sessionDirRaw);
+    if (!existsSync(sessionDir)) throw new Error(`Session dir not found: ${sessionDir}`);
+
+    const question = asStringFlag(flags, "question");
+    if (!question) throw new Error("Missing --question.");
+
+    const contextFile = asStringFlag(flags, "context-file") ?? join(sessionDir, "context.md");
+    const excerptFile = asStringFlag(flags, "excerpt-file") ?? join(sessionDir, "excerpt.md");
+    const maxRounds = asIntFlag(flags, "max-rounds") ?? 5;
+    const threadId = sessionDir.split("/").pop() ?? `RS-robot-${Date.now()}`;
+
+    const context = existsSync(contextFile) ? readFileSync(contextFile, "utf8") : "";
+    const excerpt = existsSync(excerptFile) ? readFileSync(excerptFile, "utf8") : "";
+
+    // Resolve agent binaries — flags > env vars > PATH
+    function resolveBin(flagName: string, envVar: string, defaultName: string): string {
+      return asStringFlag(flags, flagName) ?? process.env[envVar] ?? defaultName;
+    }
+    const claudeBin = resolveBin("claude-bin", "BRENNER_CLAUDE_BIN", "claude");
+    const codexBin  = resolveBin("codex-bin",  "BRENNER_CODEX_BIN",  "codex");
+    const geminiBin = resolveBin("gemini-bin", "BRENNER_GEMINI_BIN", "gemini");
+
+    // Augment PATH so agent binaries in ~/.local/bin and common locations are found
+    const localBin = join(homedir(), ".local", "bin");
+    const augmentedPath = [localBin, "/usr/local/bin", process.env.PATH ?? ""].filter(Boolean).join(":");
+
+    // Agent roles from session-kickoff (keys are model family names)
+    const roles = {
+      BlueLake:      AGENT_ROLES["Claude"]  ?? AGENT_ROLES["Opus"],
+      RedForest:     AGENT_ROLES["Codex"]   ?? AGENT_ROLES["codex-cli"],
+      GreenMountain: AGENT_ROLES["Gemini"]  ?? AGENT_ROLES["gemini-cli"],
+    };
+
+    // -------------------------------------------------------------------
+    // Invoke a single agent async — returns stdout when process exits
+    // -------------------------------------------------------------------
+    function invokeRobotAgent(
+      name: "BlueLake" | "RedForest" | "GreenMountain",
+      prompt: string,
+      roundDir: string,
+    ): Promise<string> {
+      const slug = name.toLowerCase();
+      const promptFile = join(roundDir, `${slug}_prompt.md`);
+      const outFile    = join(roundDir, `${slug}_out.md`);
+      writeFileSync(promptFile, prompt);
+
+      stderrLine(`  → Invoking ${name}...`);
+
+      return new Promise<string>((resolve) => {
+        let bin: string;
+        let args: string[];
+        let spawnEnv: NodeJS.ProcessEnv;
+
+        if (name === "BlueLake") {
+          bin = claudeBin;
+          args = ["--dangerously-skip-permissions", "--output-format", "text", "-p", prompt];
+          spawnEnv = { ...process.env, PATH: augmentedPath, CLAUDECODE: "", CLAUDE_CODE_ENTRYPOINT: "", AGENT_NAME: "BlueLake" };
+        } else if (name === "RedForest") {
+          bin = codexBin;
+          args = ["exec", "--full-auto", "--output-last-message", outFile, "--json", prompt];
+          spawnEnv = { ...process.env, PATH: augmentedPath, AGENT_NAME: "RedForest" };
+        } else {
+          bin = geminiBin;
+          args = ["--yolo", "--output-format", "text", "-p", prompt];
+          spawnEnv = { ...process.env, PATH: augmentedPath, AGENT_NAME: "GreenMountain" };
+        }
+
+        const { spawn } = require("node:child_process") as typeof import("node:child_process");
+        const child = spawn(bin, args, {
+          env: spawnEnv,
+          stdio: ["ignore", "pipe", "pipe"],
+          detached: true,
+        });
+
+        const chunks: Buffer[] = [];
+        child.stdout?.on("data", (d: Buffer) => chunks.push(d));
+
+        child.on("error", (err: Error) => {
+          stderrLine(`  ⚠ ${name} failed to launch: ${err.message}`);
+          writeFileSync(outFile, "");
+          resolve("");
+        });
+
+        const TIMEOUT_MS = 300_000;
+        const timer = setTimeout(() => {
+          child.kill();
+          stderrLine(`  ⚠ ${name} timed out after ${TIMEOUT_MS / 1000}s`);
+        }, TIMEOUT_MS);
+
+        child.on("close", (code: number | null) => {
+          clearTimeout(timer);
+          // RedForest writes to outFile directly via --output-last-message
+          let output: string;
+          if (name === "RedForest") {
+            output = existsSync(outFile) ? readFileSync(outFile, "utf8") : "";
+          } else {
+            output = Buffer.concat(chunks).toString();
+          }
+          if (code !== 0 && code !== null) {
+            stderrLine(`  ⚠ ${name} exited ${code}`);
+          }
+          writeFileSync(outFile, output);
+          // Print a meaningful excerpt so the operator knows what each agent said
+          const preview = output.replace(/```delta[\s\S]*?```/g, "[delta block]").trim().slice(0, 600);
+          stderrLine(`  ✓ ${name} done — excerpt:\n${preview ? preview.split("\n").map((l: string) => `    ${l}`).join("\n") : "    (no prose output)"}\n`);
+          resolve(output);
+        });
+      });
+    }
+
+    // -------------------------------------------------------------------
+    // Round 2+ prompt builder
+    // -------------------------------------------------------------------
+    const ROUND_INSTRUCTIONS: Record<number, string> = {
+      2: `This is Round 2. Review other agents' findings from Round 1 (shown in the artifact below).
+Make your first kill attempts — identify the weakest hypotheses and KILL them with explicit reasons.
+You may ADD refinements but kills are the priority.`,
+      3: `This is Round 3 (convergence). KILLS MUST EXCEED ADDS.
+You must provide final verdicts on all surviving hypotheses.
+Kill any hypothesis that cannot withstand scrutiny. Fewer strong hypotheses beats more weak ones.`,
+    };
+
+    function getRoundInstructions(round: number): string {
+      return ROUND_INSTRUCTIONS[round] ??
+        `This is Round ${round} (convergence). Kills must exceed adds. Finalize verdicts on all hypotheses.`;
+    }
+
+    function buildRoundNPrompt(
+      agentName: string,
+      role: { systemPrompt: string; displayName: string },
+      artifact: Artifact,
+    ): string {
+      const artifactMd = renderArtifactMarkdown(artifact);
+      return `You are ${agentName} (${role.displayName}) in a Brenner Protocol session.
+
+## Your Role
+${role.systemPrompt}
+
+## ${getRoundInstructions(artifact.metadata.version + 1)}
+
+## Current Artifact (v${artifact.metadata.version})
+
+${artifactMd}
+
+## Output Format
+
+Respond ONLY with delta blocks. Each delta is a JSON object in a \`\`\`delta fence.
+One JSON object per fence. No arrays. No prose outside the delta blocks.
+
+Valid operations: ADD (target_id: null), EDIT (target_id required), KILL (target_id required).
+Valid sections: hypothesis_slate, discriminative_tests, assumption_ledger, anomaly_register,
+  adversarial_critique, research_thread, predictions_table.
+
+The compiler assigns IDs (H1, H2, T1, A1, C1, etc.). Do not invent your own IDs.
+For KILL, use the "reason" field (not "kill_reason").
+
+Example KILL:
+\`\`\`delta
+{
+  "operation": "KILL",
+  "section": "hypothesis_slate",
+  "target_id": "H1",
+  "payload": { "reason": "Fails T2: mechanism requires X but X is ruled out by Y." },
+  "rationale": "[inference from test results]"
+}
+\`\`\`
+`;
+    }
+
+    // -------------------------------------------------------------------
+    // Auto-patch structural gaps after lint
+    // -------------------------------------------------------------------
+    function generateRobotAutoPatches(report: LintReport, artifact: Artifact): (ValidDelta & { timestamp: string; agent: string })[] {
+      const patches: (ValidDelta & { timestamp: string; agent: string })[] = [];
+      const ts = new Date().toISOString();
+
+      for (const violation of report.violations) {
+        if (violation.severity !== "error") continue;
+
+        switch (violation.id) {
+          case "EH-001": {
+            // Fewer than 3 active hypotheses — add a synthesis placeholder
+            const activeCount = Object.values(artifact.sections.hypothesis_slate ?? {})
+              .filter((h: any) => !h.killed).length;
+            if (activeCount < 3) {
+              patches.push({
+                valid: true, operation: "ADD", section: "hypothesis_slate",
+                target_id: null, timestamp: ts, agent: "SilentRiver",
+                payload: {
+                  name: "Synthesis Hypothesis",
+                  claim: "The surviving hypotheses are complementary and should be unified into a single operational model.",
+                  mechanism: "Auto-generated synthesis to satisfy convergence minimum. Operator should refine.",
+                  third_alternative: true,
+                },
+                rationale: "[auto-patch: EH-001]",
+              });
+            }
+            break;
+          }
+          case "EA-001": {
+            // Missing scale_check assumption
+            patches.push({
+              valid: true, operation: "ADD", section: "assumption_ledger",
+              target_id: null, timestamp: ts, agent: "SilentRiver",
+              payload: {
+                name: "Market scale ceiling",
+                claim: "The addressable market is bounded by the size of the target user population.",
+                type: "scale_check",
+                status: "active",
+              },
+              rationale: "[auto-patch: EA-001]",
+            });
+            break;
+          }
+          case "EC-001": {
+            // Fewer than 2 critiques
+            patches.push({
+              valid: true, operation: "ADD", section: "adversarial_critique",
+              target_id: null, timestamp: ts, agent: "SilentRiver",
+              payload: {
+                name: "Hidden third alternative",
+                claim: "Both the primary hypotheses may be wrong if a simpler underlying mechanism is being overlooked.",
+                severity: "major",
+                real_third_alternative: true,
+              },
+              rationale: "[auto-patch: EC-001]",
+            });
+            break;
+          }
+          case "ER-001": {
+            // Missing research_thread statement
+            if (!(artifact.sections as any).research_thread?.statement) {
+              patches.push({
+                valid: true, operation: "EDIT", section: "research_thread",
+                target_id: "RT", timestamp: ts, agent: "SilentRiver",
+                payload: {
+                  statement: question,
+                  context: context.slice(0, 500),
+                  why_it_matters: "Determines which hypotheses survive rigorous adversarial testing.",
+                },
+                rationale: "[auto-patch: ER-001]",
+              });
+            }
+            break;
+          }
+        }
+      }
+
+      return patches;
+    }
+
+    // -------------------------------------------------------------------
+    // Convergence check
+    // -------------------------------------------------------------------
+    function checkRobotConvergence(
+      artifact: Artifact,
+      killsThisRound: number,
+      addsThisRound: number,
+    ): { converged: boolean; reason: string } {
+      const active = Object.values(artifact.sections.hypothesis_slate ?? {}).filter((h: any) => !h.killed);
+      const hasThirdAlt = active.some((h: any) => h.third_alternative);
+      const critiques = Object.values(artifact.sections.adversarial_critique ?? {});
+      const hasRealThirdAlt = critiques.some((c: any) => c.real_third_alternative);
+
+      if (killsThisRound <= addsThisRound)
+        return { converged: false, reason: `kills (${killsThisRound}) ≤ adds (${addsThisRound})` };
+      if (active.length < 3)
+        return { converged: false, reason: `only ${active.length} active hypothesis${active.length === 1 ? "" : "es"}` };
+      if (!hasThirdAlt)
+        return { converged: false, reason: "no third_alternative hypothesis" };
+      if (!hasRealThirdAlt)
+        return { converged: false, reason: "no real_third_alternative critique" };
+
+      return { converged: true, reason: "all criteria met" };
+    }
+
+    // -------------------------------------------------------------------
+    // Verdict generator — plain-language synthesis for the operator
+    // -------------------------------------------------------------------
+    async function generateVerdict(finalArtifact: Artifact, researchQuestion: string, dir: string): Promise<void> {
+      stderrLine(`\n  Generating plain-language verdict...`);
+      const artifactMd = renderArtifactMarkdown(finalArtifact);
+      const verdictPrompt = `You are a sharp business advisor summarizing a multi-agent research debate for a founder.
+
+The original question was: ${researchQuestion}
+
+Here is the full research artifact produced by the debate:
+
+${artifactMd}
+
+Write a plain-language verdict that directly answers the question. Use this exact format:
+
+## Verdict
+
+**The answer**: [one sentence — direct answer to the question]
+
+**What got eliminated and why**:
+- [option described in plain terms]: eliminated because [plain English reason, no hedging]
+
+**What survived**:
+- [option described in plain terms]: [why it held up under adversarial pressure]
+
+**What to do first**: [one specific, concrete next action — not "validate", not "explore", not "consider"]
+
+**Biggest unresolved risk**: [what the debate flagged but couldn't kill — the thing that could still blow this up]
+
+Rules:
+- Never use internal IDs like H1, H2, T1, A1, C1, etc.
+- Never use Brenner Protocol terms: hypothesis slate, adversarial critique, assumption ledger, delta, discriminative test, potency, third_alternative
+- No academic hedging. Talk like a smart advisor who has read everything and formed an opinion.
+- If something is a bad idea, say it's a bad idea.
+- The founder reading this has not seen the artifact. Write for them, not for the protocol.`;
+
+      const { spawn } = require("node:child_process") as typeof import("node:child_process");
+      const verdictFile = join(dir, "verdict.md");
+      const promptFile = join(dir, "verdict_prompt.md");
+      writeFileSync(promptFile, verdictPrompt);
+
+      await new Promise<void>((resolve) => {
+        const child = spawn(claudeBin, ["--dangerously-skip-permissions", "--output-format", "text", "-p", verdictPrompt], {
+          env: { ...process.env, PATH: augmentedPath, CLAUDECODE: "", CLAUDE_CODE_ENTRYPOINT: "", AGENT_NAME: "SilentRiver" },
+          maxBuffer: 5 * 1024 * 1024,
+        });
+        const chunks: Buffer[] = [];
+        child.stdout?.on("data", (d: Buffer) => chunks.push(d));
+        child.on("error", (err: Error) => { stderrLine(`  ⚠ Verdict generation failed: ${err.message}`); resolve(); });
+        child.on("close", () => {
+          const output = Buffer.concat(chunks).toString().trim();
+          writeFileSync(verdictFile, output || "Verdict generation produced no output.");
+          stderrLine(`  ✓ verdict.md written`);
+          resolve();
+        });
+      });
+    }
+
+    // -------------------------------------------------------------------
+    // Main robot loop
+    // -------------------------------------------------------------------
+    stderrLine(`\nBrenner Robot Mode — Session: ${threadId}`);
+    stderrLine(`Question: ${question}`);
+    stderrLine(`Max rounds: ${maxRounds}\n`);
+
+    const stateFile = join(sessionDir, "session_state.json");
+    let artifact: Artifact = existsSync(stateFile)
+      ? (JSON.parse(readFileSync(stateFile, "utf8")) as Artifact)
+      : createEmptyArtifact(threadId);
+
+    const startRound = artifact.metadata.version > 0 ? artifact.metadata.version + 1 : 1;
+
+    for (let round = startRound; round <= maxRounds; round++) {
+      stderrLine(`\n=== Round ${round} ===`);
+      const roundDir = join(sessionDir, `round_${round}`);
+      mkdirSync(roundDir, { recursive: true });
+
+      // Build prompts
+      let bluelakePrompt: string;
+      let redforestPrompt: string;
+      let greenmountainPrompt: string;
+
+      if (round === 1) {
+        const messages = composeKickoffMessages({
+          threadId,
+          researchQuestion: question,
+          context,
+          excerpt,
+          recipients: ["BlueLake", "RedForest", "GreenMountain"],
+          recipientRoles: {
+            BlueLake:      "test_designer",
+            RedForest:     "hypothesis_generator",
+            GreenMountain: "adversarial_critic",
+          },
+        });
+        bluelakePrompt      = messages.find((m) => m.to === "BlueLake")!.body;
+        redforestPrompt     = messages.find((m) => m.to === "RedForest")!.body;
+        greenmountainPrompt = messages.find((m) => m.to === "GreenMountain")!.body;
+      } else {
+        bluelakePrompt      = buildRoundNPrompt("BlueLake",      roles.BlueLake,      artifact);
+        redforestPrompt     = buildRoundNPrompt("RedForest",     roles.RedForest,     artifact);
+        greenmountainPrompt = buildRoundNPrompt("GreenMountain", roles.GreenMountain, artifact);
+      }
+
+      // Inject operator notes from previous round (HITL — always-on)
+      if (round > 1) {
+        const notesFile = join(sessionDir, `operator_notes_round_${round - 1}.md`);
+        if (existsSync(notesFile)) {
+          const notes = readFileSync(notesFile, "utf8").trim();
+          if (notes) {
+            const injection = `\n\n## Operator Input (after Round ${round - 1})\n\nThe session operator reviewed Round ${round - 1} and provided this direct feedback. Treat this as authoritative context that overrides your priors:\n\n${notes}\n\nAddress this feedback explicitly in your Round ${round} output.\n`;
+            bluelakePrompt      += injection;
+            redforestPrompt     += injection;
+            greenmountainPrompt += injection;
+            stderrLine(`  Injected operator notes from round_${round - 1} into all agent prompts`);
+          }
+        }
+      }
+
+      // Invoke all three agents in parallel
+      stderrLine(`  Agents running in parallel...`);
+      const [bluelakeOut, redforestOut, greenmountainOut] = await Promise.all([
+        invokeRobotAgent("BlueLake",      bluelakePrompt,      roundDir),
+        invokeRobotAgent("RedForest",     redforestPrompt,     roundDir),
+        invokeRobotAgent("GreenMountain", greenmountainPrompt, roundDir),
+      ]);
+
+      // Parse and timestamp deltas from each agent
+      const ts = new Date().toISOString();
+      const allDeltas = [
+        ...extractValidDeltas(bluelakeOut).map((d) => ({ ...d, timestamp: ts, agent: "BlueLake" })),
+        ...extractValidDeltas(redforestOut).map((d) => ({ ...d, timestamp: new Date(Date.now() + 1).toISOString(), agent: "RedForest" })),
+        ...extractValidDeltas(greenmountainOut).map((d) => ({ ...d, timestamp: new Date(Date.now() + 2).toISOString(), agent: "GreenMountain" })),
+      ];
+
+      const killsThisRound = allDeltas.filter((d) => d.operation === "KILL").length;
+      const addsThisRound  = allDeltas.filter((d) => d.operation === "ADD").length;
+
+      stderrLine(`  Parsed: ${allDeltas.length} deltas (${addsThisRound} adds, ${killsThisRound} kills)`);
+      writeFileSync(join(roundDir, "deltas.json"), JSON.stringify(allDeltas, null, 2));
+
+      if (allDeltas.length === 0) {
+        stderrLine("  ⚠ No deltas parsed from any agent. Check round dir output files.");
+      }
+
+      // Merge deltas into artifact
+      const mergeResult = mergeArtifactWithTimestamps(artifact, allDeltas);
+      artifact = mergeResult.artifact; // use partial on error
+      if (!mergeResult.ok) {
+        stderrLine(`  ⚠ Merge errors: ${mergeResult.errors.map((e: any) => e.message).join(", ")}`);
+      }
+      artifact.metadata.version = round;
+
+      // Lint and auto-patch
+      const report = lintArtifact(artifact);
+      const errorCodes = report.violations.filter((v) => v.severity === "error").map((v) => v.id);
+      stderrLine(`  Lint: ${report.valid ? "VALID" : `INVALID [${errorCodes.join(", ")}]`}`);
+
+      if (!report.valid) {
+        const patches = generateRobotAutoPatches(report, artifact);
+        if (patches.length > 0) {
+          stderrLine(`  Auto-patching: ${patches.map((p) => `${p.operation} ${p.section}`).join(", ")}`);
+          const patchResult = mergeArtifactWithTimestamps(artifact, patches);
+          if (patchResult.ok) artifact = patchResult.artifact;
+        }
+      }
+
+      // Write outputs after every round
+      writeFileSync(join(sessionDir, "artifact.md"), renderArtifactMarkdown(artifact));
+      writeFileSync(stateFile, JSON.stringify(artifact, null, 2));
+      stderrLine(`  Wrote artifact.md and session_state.json`);
+
+      // State of play — printed so the HITL operator can give meaningful feedback
+      const allHypotheses = Object.values(artifact.sections.hypothesis_slate ?? {}) as any[];
+      const activeHyps = allHypotheses.filter((h: any) => !h.killed);
+      const killedHyps = allHypotheses.filter((h: any) => h.killed);
+      stderrLine(`\n  ┌─ State of Play (Round ${round}) ${"─".repeat(30)}`);
+      stderrLine(`  │  Active (${activeHyps.length}):`);
+      for (const h of activeHyps) {
+        stderrLine(`  │    + ${(h.name ?? h.claim?.slice(0, 70) ?? "unnamed")}`);
+      }
+      if (killedHyps.length > 0) {
+        stderrLine(`  │  Killed (${killedHyps.length} total):`);
+        for (const h of killedHyps) {
+          stderrLine(`  │    ✗ ${(h.name ?? h.claim?.slice(0, 60) ?? "unnamed")}`);
+        }
+      }
+      stderrLine(`  │  This round: ${addsThisRound} adds, ${killsThisRound} kills`);
+      stderrLine(`  │  Linter: ${report.valid ? "VALID" : `INVALID [${errorCodes.join(", ")}]`}`);
+      stderrLine(`  └${"─".repeat(44)}\n`);
+
+      // Check convergence (minimum 3 rounds)
+      if (round >= 3) {
+        const { converged, reason } = checkRobotConvergence(artifact, killsThisRound, addsThisRound);
+        if (converged) {
+          stderrLine(`\nConverged after round ${round}. Reason: ${reason}`);
+          await generateVerdict(artifact, question, sessionDir);
+          stderrLine(`Artifact: ${join(sessionDir, "artifact.md")}`);
+          stderrLine(`Verdict:  ${join(sessionDir, "verdict.md")}`);
+          process.exit(0);
+        } else {
+          stderrLine(`  Not converged: ${reason}`);
+        }
+      }
+    }
+
+    stderrLine(`\nMax rounds (${maxRounds}) reached without convergence.`);
+    await generateVerdict(artifact, question, sessionDir);
+    stderrLine(`Artifact: ${join(sessionDir, "artifact.md")}`);
+    stderrLine(`Verdict:  ${join(sessionDir, "verdict.md")}`);
+    process.exit(0);
+  }
+
+  // ============================================================================
+  // Orchestrator Sub-Commands — used by the Claude Code skill in place of
+  // `session robot`. Claude acts as orchestrator (BlueLake + SilentRiver),
+  // spawning Codex and Gemini via Bash. These commands handle the stateful
+  // parts: prompt generation, delta merging, linting, and verdict prompting.
+  // ============================================================================
+
+  // --------------------------------------------------------------------------
+  // brenner round build
+  //   --session-dir <path>   session directory (must exist)
+  //   --round <n>            round number (1-based)
+  //   --question <string>    research question
+  //   --context-file <path>  defaults to <session-dir>/context.md
+  //   --excerpt-file <path>  defaults to <session-dir>/excerpt.md
+  //
+  // Initialises session_state.json on round 1, builds role-specific prompts,
+  // injects operator notes from previous round, writes prompt files to round_N/.
+  // Outputs JSON to stdout: { round, promptFiles: { bluelake, redforest, greenmountain } }
+  // --------------------------------------------------------------------------
+  if (normalizedTop === "round" && sub === "build") {
+    const sessionDirRaw = asStringFlag(flags, "session-dir");
+    if (!sessionDirRaw) throw new Error("Missing --session-dir.");
+    const sessionDir = resolve(sessionDirRaw);
+    if (!existsSync(sessionDir)) throw new Error(`Session dir not found: ${sessionDir}`);
+
+    const round = asIntFlag(flags, "round");
+    if (!round || round < 1) throw new Error("Missing or invalid --round (must be >= 1).");
+
+    const question = asStringFlag(flags, "question");
+    if (!question) throw new Error("Missing --question.");
+
+    const contextFile = asStringFlag(flags, "context-file") ?? join(sessionDir, "context.md");
+    const excerptFile = asStringFlag(flags, "excerpt-file") ?? join(sessionDir, "excerpt.md");
+    const threadId    = sessionDir.split("/").pop() ?? `RS-robot-${Date.now()}`;
+    const stateFile   = join(sessionDir, "session_state.json");
+
+    const context = existsSync(contextFile) ? readFileSync(contextFile, "utf8") : "";
+    const excerpt = existsSync(excerptFile) ? readFileSync(excerptFile, "utf8") : "";
+
+    // Load or initialise artifact
+    let artifact: Artifact = existsSync(stateFile)
+      ? (JSON.parse(readFileSync(stateFile, "utf8")) as Artifact)
+      : createEmptyArtifact(threadId);
+
+    // On round 1 with a brand-new artifact, persist the skeleton immediately
+    if (round === 1 && artifact.metadata.version === 0) {
+      writeFileSync(stateFile, JSON.stringify(artifact, null, 2));
+    }
+
+    const roles = {
+      BlueLake:      AGENT_ROLES["Claude"]  ?? AGENT_ROLES["Opus"],
+      RedForest:     AGENT_ROLES["Codex"]   ?? AGENT_ROLES["codex-cli"],
+      GreenMountain: AGENT_ROLES["Gemini"]  ?? AGENT_ROLES["gemini-cli"],
+    };
+
+    // Build role-specific prompts
+    let bluelakePrompt: string;
+    let redforestPrompt: string;
+    let greenmountainPrompt: string;
+
+    if (round === 1) {
+      const messages = composeKickoffMessages({
+        threadId,
+        researchQuestion: question,
+        context,
+        excerpt,
+        recipients: ["BlueLake", "RedForest", "GreenMountain"],
+        recipientRoles: {
+          BlueLake:      "test_designer",
+          RedForest:     "hypothesis_generator",
+          GreenMountain: "adversarial_critic",
+        },
+      });
+      bluelakePrompt      = messages.find((m) => m.to === "BlueLake")!.body;
+      redforestPrompt     = messages.find((m) => m.to === "RedForest")!.body;
+      greenmountainPrompt = messages.find((m) => m.to === "GreenMountain")!.body;
+    } else {
+      const ROUND_INSTRUCTIONS: Record<number, string> = {
+        2: `This is Round 2. Review other agents' findings from Round 1 (shown in the artifact below).
+Make your first kill attempts — identify the weakest hypotheses and KILL them with explicit reasons.
+You may ADD refinements but kills are the priority.`,
+        3: `This is Round 3 (convergence). KILLS MUST EXCEED ADDS.
+You must provide final verdicts on all surviving hypotheses.
+Kill any hypothesis that cannot withstand scrutiny. Fewer strong hypotheses beats more weak ones.`,
+      };
+      const roundInstructions = ROUND_INSTRUCTIONS[round] ??
+        `This is Round ${round} (convergence). Kills must exceed adds. Finalize verdicts on all hypotheses.`;
+
+      const artifactMd = renderArtifactMarkdown(artifact);
+      const buildRoundPrompt = (agentName: string, role: { systemPrompt: string; displayName: string }) =>
+        `You are ${agentName} (${role.displayName}) in a Brenner Protocol session.\n\n## Your Role\n${role.systemPrompt}\n\n## ${roundInstructions}\n\n## Current Artifact (v${artifact.metadata.version})\n\n${artifactMd}\n\n## Output Format\n\nRespond ONLY with delta blocks. Each delta is a JSON object in a \`\`\`delta fence.\nOne JSON object per fence. No arrays. No prose outside the delta blocks.\n\nValid operations: ADD (target_id: null), EDIT (target_id required), KILL (target_id required).\nValid sections: hypothesis_slate, discriminative_tests, assumption_ledger, anomaly_register,\n  adversarial_critique, research_thread, predictions_table.\n\nThe compiler assigns IDs (H1, H2, T1, A1, C1, etc.). Do not invent your own IDs.\nFor KILL, use the "reason" field (not "kill_reason").\n\nExample KILL:\n\`\`\`delta\n{\n  "operation": "KILL",\n  "section": "hypothesis_slate",\n  "target_id": "H1",\n  "payload": { "reason": "Fails T2: mechanism requires X but X is ruled out by Y." },\n  "rationale": "[inference from test results]"\n}\n\`\`\`\n`;
+
+      bluelakePrompt      = buildRoundPrompt("BlueLake",      roles.BlueLake);
+      redforestPrompt     = buildRoundPrompt("RedForest",     roles.RedForest);
+      greenmountainPrompt = buildRoundPrompt("GreenMountain", roles.GreenMountain);
+    }
+
+    // Inject per-agent session history (manual session continuity).
+    // After each round, the orchestrator appends to {agent}_history.md.
+    // This gives each agent memory of its own prior arguments.
+    if (round > 1) {
+      const historyEntries: Array<[string, () => string, (s: string) => void]> = [
+        ["bluelake",      () => bluelakePrompt,      (s) => { bluelakePrompt = s; }],
+        ["redforest",     () => redforestPrompt,     (s) => { redforestPrompt = s; }],
+        ["greenmountain", () => greenmountainPrompt, (s) => { greenmountainPrompt = s; }],
+      ];
+      for (const [key, get, set] of historyEntries) {
+        const histFile = join(sessionDir, `${key}_history.md`);
+        if (existsSync(histFile)) {
+          const history = readFileSync(histFile, "utf8").trim();
+          if (history) {
+            set(get() + `\n\n## Your Prior Contributions (Session History)\n\nYour previous prompts and responses are shown below. Build on your prior arguments — don't repeat them verbatim:\n\n${history}\n`);
+          }
+        }
+      }
+    }
+
+    // Inject operator notes from previous round.
+    // Supports per-agent files (operator_notes_round_N_{agent}.md) preferred over
+    // shared file (operator_notes_round_N.md). Per-agent files let the operator
+    // answer each agent's questions separately — only that agent sees its own answers.
+    if (round > 1) {
+      const prevRound = round - 1;
+      const notesEntries: Array<[string, string, () => string, (s: string) => void]> = [
+        ["bluelake",      "BlueLake",      () => bluelakePrompt,      (s) => { bluelakePrompt = s; }],
+        ["redforest",     "RedForest",     () => redforestPrompt,     (s) => { redforestPrompt = s; }],
+        ["greenmountain", "GreenMountain", () => greenmountainPrompt, (s) => { greenmountainPrompt = s; }],
+      ];
+      for (const [key, name, get, set] of notesEntries) {
+        const agentNotesFile  = join(sessionDir, `operator_notes_round_${prevRound}_${key}.md`);
+        const sharedNotesFile = join(sessionDir, `operator_notes_round_${prevRound}.md`);
+        const notesFile = existsSync(agentNotesFile) ? agentNotesFile
+                        : existsSync(sharedNotesFile) ? sharedNotesFile
+                        : null;
+        if (notesFile) {
+          const notes = readFileSync(notesFile, "utf8").trim();
+          if (notes) {
+            set(get() + `\n\n## Operator Input (after Round ${prevRound})\n\nThe session operator reviewed Round ${prevRound} and provided this direct feedback. Treat this as authoritative:\n\n${notes}\n\nAddress this feedback explicitly in your Round ${round} output.\n`);
+          }
+        }
+      }
+    }
+
+    // Write prompt files
+    const roundDir = join(sessionDir, `round_${round}`);
+    mkdirSync(roundDir, { recursive: true });
+
+    const promptFiles = {
+      bluelake:      join(roundDir, "bluelake_prompt.md"),
+      redforest:     join(roundDir, "redforest_prompt.md"),
+      greenmountain: join(roundDir, "greenmountain_prompt.md"),
+    };
+    writeFileSync(promptFiles.bluelake,      bluelakePrompt);
+    writeFileSync(promptFiles.redforest,     redforestPrompt);
+    writeFileSync(promptFiles.greenmountain, greenmountainPrompt);
+
+    stdoutLine(JSON.stringify({ ok: true, round, sessionDir, promptFiles }, null, 2));
+    process.exit(0);
+  }
+
+  // --------------------------------------------------------------------------
+  // brenner round close
+  //   --session-dir <path>   session directory
+  //   --round <n>            round number
+  //
+  // Reads round_N/{bluelake,redforest,greenmountain}_out.md, parses deltas,
+  // merges into artifact, lints, auto-patches, persists artifact.md +
+  // session_state.json + round_N/deltas.json.
+  // Outputs JSON to stdout: { valid, adds, kills, activeHypotheses,
+  //   killedHypotheses, converged, convergedReason, stateOfPlay }
+  // --------------------------------------------------------------------------
+  if (normalizedTop === "round" && sub === "close") {
+    const sessionDirRaw = asStringFlag(flags, "session-dir");
+    if (!sessionDirRaw) throw new Error("Missing --session-dir.");
+    const sessionDir = resolve(sessionDirRaw);
+    if (!existsSync(sessionDir)) throw new Error(`Session dir not found: ${sessionDir}`);
+
+    const round = asIntFlag(flags, "round");
+    if (!round || round < 1) throw new Error("Missing or invalid --round.");
+
+    const stateFile = join(sessionDir, "session_state.json");
+    if (!existsSync(stateFile)) throw new Error(`session_state.json not found — run 'round build' first.`);
+
+    let artifact: Artifact = JSON.parse(readFileSync(stateFile, "utf8")) as Artifact;
+    const roundDir = join(sessionDir, `round_${round}`);
+
+    // Read agent outputs (missing file = empty string, no crash)
+    const read = (name: string) => {
+      const p = join(roundDir, name);
+      return existsSync(p) ? readFileSync(p, "utf8") : "";
+    };
+    const bluelakeOut      = read("bluelake_out.md");
+    const redforestOut     = read("redforest_out.md");
+    const greenmountainOut = read("greenmountain_out.md");
+
+    // Normalize agent-specific op aliases before parsing.
+    // GreenMountain uses ΔE/† instead of EDIT/KILL; RedForest sometimes uses ADD_HYPOTHESIS.
+    const normalize = (s: string) => s
+      .replace(/"op"\s*:\s*"ΔE"/g,            '"operation": "EDIT"')
+      .replace(/"op"\s*:\s*"†"/g,             '"operation": "KILL"')
+      .replace(/"op"\s*:\s*"ADD"/g,           '"operation": "ADD"')
+      .replace(/"op"\s*:\s*"EDIT"/g,          '"operation": "EDIT"')
+      .replace(/"op"\s*:\s*"KILL"/g,          '"operation": "KILL"')
+      .replace(/"op"\s*:\s*"ADD_HYPOTHESIS"/g, '"operation": "ADD"');
+
+    // Parse deltas with per-agent timestamps so ordering is deterministic
+    const ts = new Date().toISOString();
+    const bluelakeDeltas      = extractValidDeltas(normalize(bluelakeOut));
+    const redforestDeltas     = extractValidDeltas(normalize(redforestOut));
+    const greenmountainDeltas = extractValidDeltas(normalize(greenmountainOut));
+
+    // Per-agent delta failure detection — LOUD, not silent
+    const agentOutputs: Array<{ name: string; key: string; deltas: ValidDelta[]; raw: string }> = [
+      { name: "BlueLake",      key: "bluelake",      deltas: bluelakeDeltas,      raw: bluelakeOut },
+      { name: "RedForest",     key: "redforest",     deltas: redforestDeltas,     raw: redforestOut },
+      { name: "GreenMountain", key: "greenmountain", deltas: greenmountainDeltas, raw: greenmountainOut },
+    ];
+    const agentDeltaCounts: Record<string, number> = {};
+    const deltaFailures: string[] = [];
+    for (const a of agentOutputs) {
+      agentDeltaCounts[a.key] = a.deltas.length;
+      if (a.deltas.length === 0) {
+        deltaFailures.push(a.name);
+        const outPath = join(roundDir, `${a.key}_out.md`);
+        process.stderr.write(`\n  ⛔ DELTA FAILURE: ${a.name} produced 0 valid delta blocks.\n`);
+        if (a.raw.length === 0) {
+          process.stderr.write(`  → ${outPath} is EMPTY. Agent timed out or failed to launch.\n`);
+        } else {
+          process.stderr.write(`  → ${outPath} has ${a.raw.length} bytes but no parseable delta blocks.\n`);
+          process.stderr.write(`  → Check for: wrong op names, YAML syntax, unterminated JSON, prose-only output.\n`);
+          process.stderr.write(`  → Raw preview: ${a.raw.slice(0, 400).replace(/\n/g, "\\n")}\n`);
+        }
+        process.stderr.write(`  → Re-invoke ${a.name} with "CRITICAL: output ONLY \`\`\`delta JSON blocks. No prose."\n\n`);
+      }
+    }
+
+    const allDeltas: (ValidDelta & { timestamp: string; agent: string })[] = [
+      ...bluelakeDeltas.map((d) => ({ ...d, timestamp: ts, agent: "BlueLake" })),
+      ...redforestDeltas.map((d) => ({ ...d, timestamp: new Date(Date.now() + 1).toISOString(), agent: "RedForest" })),
+      ...greenmountainDeltas.map((d) => ({ ...d, timestamp: new Date(Date.now() + 2).toISOString(), agent: "GreenMountain" })),
+    ];
+
+    const killsThisRound = allDeltas.filter((d) => d.operation === "KILL").length;
+    const addsThisRound  = allDeltas.filter((d) => d.operation === "ADD").length;
+    writeFileSync(join(roundDir, "deltas.json"), JSON.stringify(allDeltas, null, 2));
+
+    // Merge and set version
+    const mergeResult = mergeArtifactWithTimestamps(artifact, allDeltas);
+    artifact = mergeResult.artifact;
+    artifact.metadata.version = round;
+
+    // Lint + auto-patch
+    const report = lintArtifact(artifact);
+    if (!report.valid) {
+      const patches: (ValidDelta & { timestamp: string; agent: string })[] = [];
+      const patchTs = new Date().toISOString();
+      for (const v of report.violations.filter((v) => v.severity === "error")) {
+        const active = Object.values(artifact.sections.hypothesis_slate ?? {}).filter((h: any) => !h.killed);
+        if (v.id === "EH-001" && active.length < 3) {
+          patches.push({ valid: true, operation: "ADD", section: "hypothesis_slate", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Synthesis Hypothesis", claim: "The surviving hypotheses are complementary and should be unified into a single operational model.", mechanism: "Auto-generated synthesis to satisfy convergence minimum. Operator should refine.", third_alternative: true }, rationale: "[auto-patch: EH-001]" });
+        }
+        if (v.id === "EA-001") {
+          patches.push({ valid: true, operation: "ADD", section: "assumption_ledger", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Market scale ceiling", claim: "The addressable market is bounded by the size of the target user population.", type: "scale_check", status: "active" }, rationale: "[auto-patch: EA-001]" });
+        }
+        if (v.id === "EC-001") {
+          patches.push({ valid: true, operation: "ADD", section: "adversarial_critique", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Hidden third alternative", claim: "Both the primary hypotheses may be wrong if a simpler underlying mechanism is being overlooked.", severity: "major", real_third_alternative: true }, rationale: "[auto-patch: EC-001]" });
+        }
+        if (v.id === "ER-001" && !(artifact.sections as any).research_thread?.statement) {
+          patches.push({ valid: true, operation: "EDIT", section: "research_thread", target_id: "RT", timestamp: patchTs, agent: "SilentRiver", payload: { statement: asStringFlag(flags, "question") ?? "See context.", why_it_matters: "Determines which hypotheses survive rigorous adversarial testing." }, rationale: "[auto-patch: ER-001]" });
+        }
+      }
+      if (patches.length > 0) {
+        const pr = mergeArtifactWithTimestamps(artifact, patches);
+        if (pr.ok) artifact = pr.artifact;
+      }
+    }
+
+    // Persist
+    writeFileSync(join(sessionDir, "artifact.md"), renderArtifactMarkdown(artifact));
+    writeFileSync(stateFile, JSON.stringify(artifact, null, 2));
+
+    // Convergence check (only meaningful after round 2+)
+    const allHyps    = Object.values(artifact.sections.hypothesis_slate ?? {}) as any[];
+    const activeHyps = allHyps.filter((h: any) => !h.killed);
+    const killedHyps = allHyps.filter((h: any) => h.killed);
+    const critiques  = Object.values(artifact.sections.adversarial_critique ?? {}) as any[];
+    const hasThirdAlt     = activeHyps.some((h: any) => h.third_alternative);
+    const hasRealThirdAlt = critiques.some((c: any) => c.real_third_alternative);
+
+    let converged = false;
+    let convergedReason = "";
+    const convergenceWarnings: string[] = [];
+    if (round >= 3) {
+      if (killsThisRound <= addsThisRound) {
+        convergedReason = `kills (${killsThisRound}) <= adds (${addsThisRound})`;
+      } else if (activeHyps.length < 3) {
+        convergedReason = `only ${activeHyps.length} active hypotheses`;
+      } else {
+        // Converged on kill-rate + hypothesis count. third_alternative flags are advisory.
+        converged = true;
+        convergedReason = "kills > adds, ≥3 active hypotheses";
+        if (!hasThirdAlt)     convergenceWarnings.push("no third_alternative hypothesis — agents should propose one");
+        if (!hasRealThirdAlt) convergenceWarnings.push("no real_third_alternative critique — agents should add one");
+      }
+    } else {
+      convergedReason = `round ${round} < 3 (convergence not checked yet)`;
+    }
+
+    const lintAfter = lintArtifact(artifact);
+    stdoutLine(JSON.stringify({
+      ok: true,
+      round,
+      adds:                addsThisRound,
+      kills:               killsThisRound,
+      deltasTotal:         allDeltas.length,
+      agentDeltaCounts,
+      deltaFailures,
+      lintValid:           lintAfter.valid,
+      lintViolations:      lintAfter.violations.filter((v) => v.severity === "error").map((v) => v.id),
+      activeHypotheses:    activeHyps.map((h: any) => ({ id: h.id, name: h.name ?? h.claim?.slice(0, 60) })),
+      killedHypotheses:    killedHyps.map((h: any) => ({ id: h.id, name: h.name ?? h.claim?.slice(0, 60) })),
+      converged,
+      convergedReason,
+      convergenceWarnings,
+    }, null, 2));
+    process.exit(0);
+  }
+
+  // --------------------------------------------------------------------------
+  // brenner session verdict-prompt
+  //   --session-dir <path>   session directory
+  //   --question <string>    original research question
+  //
+  // Reads session_state.json, renders the artifact, and outputs the verdict
+  // prompt to stdout. The orchestrating Claude reads this, writes its verdict
+  // response, and saves it to <session-dir>/verdict.md directly.
+  // --------------------------------------------------------------------------
+  if (normalizedTop === "session" && sub === "verdict-prompt") {
+    const sessionDirRaw = asStringFlag(flags, "session-dir");
+    if (!sessionDirRaw) throw new Error("Missing --session-dir.");
+    const sessionDir = resolve(sessionDirRaw);
+    const stateFile  = join(sessionDir, "session_state.json");
+    if (!existsSync(stateFile)) throw new Error(`session_state.json not found in ${sessionDir}`);
+
+    const question   = asStringFlag(flags, "question") ?? "See artifact research thread.";
+    const artifact   = JSON.parse(readFileSync(stateFile, "utf8")) as Artifact;
+    const artifactMd = renderArtifactMarkdown(artifact);
+
+    stdoutLine(`You are a sharp business advisor summarizing a multi-agent research debate for a founder.
+
+The original question was: ${question}
+
+Here is the full research artifact produced by the debate:
+
+${artifactMd}
+
+Write a plain-language verdict that directly answers the question. Use this exact format:
+
+## Verdict
+
+**The answer**: [one sentence — direct answer to the question]
+
+**What got eliminated and why**:
+- [option described in plain terms]: eliminated because [plain English reason, no hedging]
+
+**What survived**:
+- [option described in plain terms]: [why it held up under adversarial pressure]
+
+**What to do first**: [one specific, concrete next action — not "validate", not "explore", not "consider"]
+
+**Biggest unresolved risk**: [what the debate flagged but couldn't kill — the thing that could still blow this up]
+
+Rules:
+- Never use internal IDs like H1, H2, T1, A1, C1, etc.
+- Never use Brenner Protocol terms: hypothesis slate, adversarial critique, assumption ledger, delta, discriminative test, potency, third_alternative
+- No academic hedging. Talk like a smart advisor who has read everything and formed an opinion.
+- If something is a bad idea, say it's a bad idea.
+- The founder reading this has not seen the artifact. Write for them, not for the protocol.`);
+    process.exit(0);
   }
 
   // ============================================================================
