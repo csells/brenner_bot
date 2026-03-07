@@ -82,6 +82,7 @@ interface BaseItem {
   killed_by?: string;
   killed_at?: string;
   kill_reason?: string;
+  _auto_patch?: boolean;
 }
 
 /** Cross-session reference relation types */
@@ -262,6 +263,7 @@ export interface MergeSuccess {
 /** Failed merge result */
 export interface MergeFailure {
   ok: false;
+  artifact: Artifact; // partial artifact with all non-failing deltas applied
   errors: MergeError[];
   warnings: MergeWarning[];
   applied_count: number;
@@ -912,6 +914,7 @@ export function mergeArtifactWithTimestamps(
   if (errors.length > 0) {
     return {
       ok: false,
+      artifact, // return partial artifact so callers can use applied deltas
       errors,
       warnings,
       applied_count: appliedCount,
@@ -1066,6 +1069,11 @@ function renderKillBlock(item: BaseItem): string[] {
   return lines;
 }
 
+function renderAutoPatchWarning(item: BaseItem): string[] {
+  if (!item._auto_patch) return [];
+  return ["> **[AUTO-GENERATED — not agent reasoning. This placeholder was inserted because the section was empty. Refine or replace before trusting this entry.]**", ""];
+}
+
 function renderResearchThread(rt: ResearchThreadItem | null): string[] {
   const lines: string[] = [];
   lines.push("## 1. Research Thread");
@@ -1091,6 +1099,7 @@ function renderHypothesisSlate(items: HypothesisItem[]): string[] {
     const title = thirdAlt && !/third\s+alternative/i.test(name) ? `${name} (Third Alternative)` : name;
     const heading = isKilled(h) ? `### ~~${h.id}: ${title}~~` : `### ${h.id}: ${title}`;
     lines.push(heading);
+    lines.push(...renderAutoPatchWarning(h));
     lines.push(`**Claim**: ${escapeInline(h.claim)}`);
     lines.push(`**Mechanism**: ${escapeInline(h.mechanism)}`);
     lines.push(`**Anchors**: ${formatStringList(h.anchors)}`);
@@ -1138,8 +1147,13 @@ function renderTests(items: TestItem[]): string[] {
     lines.push(`**Procedure**: ${escapeInline(t.procedure)}`);
     lines.push(`**Discriminates**: ${escapeInline(t.discriminates)}`);
     lines.push("**Expected outcomes**:");
-    for (const [key, value] of Object.entries(t.expected_outcomes ?? {})) {
-      lines.push(`- ${key}: ${escapeInline(value)}`);
+    // expected_outcomes is typed as Record<string,string> but agents sometimes emit a plain string.
+    // Object.entries(string) produces character-index pairs — normalize to a single-entry object first.
+    const eo = typeof t.expected_outcomes === "string"
+      ? { outcome: t.expected_outcomes as string }
+      : (t.expected_outcomes ?? {});
+    for (const [key, value] of Object.entries(eo)) {
+      lines.push(`- ${key}: ${escapeInline(value as string)}`);
     }
     lines.push(`**Potency check**: ${escapeInline(t.potency_check)}`);
     if (t.feasibility) lines.push(`**Feasibility**: ${escapeInline(t.feasibility)}`);
@@ -1183,6 +1197,7 @@ function renderAssumptions(items: AssumptionItem[]): string[] {
   for (const a of sortById(items)) {
     const heading = isKilled(a) ? `### ~~${a.id}: ${escapeInline(a.name)}~~` : `### ${a.id}: ${escapeInline(a.name)}`;
     lines.push(heading);
+    lines.push(...renderAutoPatchWarning(a));
     lines.push(`**Statement**: ${escapeInline(a.statement)}`);
     lines.push(`**Load**: ${escapeInline(a.load)}`);
     lines.push(`**Test**: ${escapeInline(a.test)}`);
@@ -1231,6 +1246,7 @@ function renderCritiques(items: CritiqueItem[]): string[] {
   for (const c of sortById(items)) {
     const heading = isKilled(c) ? `### ~~${c.id}: ${escapeInline(c.name)}~~` : `### ${c.id}: ${escapeInline(c.name)}`;
     lines.push(heading);
+    lines.push(...renderAutoPatchWarning(c));
     lines.push(`**Attack**: ${escapeInline(c.attack)}`);
     lines.push(`**Evidence**: ${escapeInline(c.evidence)}`);
     lines.push(`**Current status**: ${escapeInline(c.current_status)}`);

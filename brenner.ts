@@ -7443,14 +7443,14 @@ Kill any hypothesis that cannot withstand scrutiny. Fewer strong hypotheses beat
 
     function buildRoundNPrompt(
       agentName: string,
-      role: { systemPrompt: string; displayName: string },
+      role: { description: string; displayName: string },
       artifact: Artifact,
     ): string {
       const artifactMd = renderArtifactMarkdown(artifact);
       return `You are ${agentName} (${role.displayName}) in a Brenner Protocol session.
 
 ## Your Role
-${role.systemPrompt}
+${role.description}
 
 ## ${getRoundInstructions(artifact.metadata.version + 1)}
 
@@ -7550,6 +7550,7 @@ Example KILL:
                   claim: "The surviving hypotheses are complementary and should be unified into a single operational model.",
                   mechanism: "Auto-generated synthesis to satisfy convergence minimum. Operator should refine.",
                   third_alternative: true,
+                  _auto_patch: true,
                 },
                 rationale: "[auto-patch: EH-001]",
               });
@@ -7566,6 +7567,7 @@ Example KILL:
                 claim: "The addressable market is bounded by the size of the target user population.",
                 type: "scale_check",
                 status: "active",
+                _auto_patch: true,
               },
               rationale: "[auto-patch: EA-001]",
             });
@@ -7581,6 +7583,7 @@ Example KILL:
                 claim: "Both the primary hypotheses may be wrong if a simpler underlying mechanism is being overlooked.",
                 severity: "major",
                 real_third_alternative: true,
+                _auto_patch: true,
               },
               rationale: "[auto-patch: EC-001]",
             });
@@ -7596,6 +7599,7 @@ Example KILL:
                   statement: question,
                   context: context.slice(0, 500),
                   why_it_matters: "Determines which hypotheses survive rigorous adversarial testing.",
+                  _auto_patch: true,
                 },
                 rationale: "[auto-patch: ER-001]",
               });
@@ -7763,10 +7767,21 @@ Rules:
 
       // Parse and timestamp deltas from each agent
       const ts = new Date().toISOString();
+      // Deduplicate within each agent's output — Codex sometimes echoes its full prompt before the
+      // response, causing every delta block to appear twice.
+      const dedupDeltas = (deltas: ValidDelta[]): ValidDelta[] => {
+        const seen = new Set<string>();
+        return deltas.filter((d) => {
+          const key = `${d.operation}|${d.section}|${d.target_id ?? "null"}|${JSON.stringify(d.payload)}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      };
       const allDeltas = [
-        ...extractValidDeltas(bluelakeOut).map((d) => ({ ...d, timestamp: ts, agent: "BlueLake" })),
-        ...extractValidDeltas(redforestOut).map((d) => ({ ...d, timestamp: new Date(Date.now() + 1).toISOString(), agent: "RedForest" })),
-        ...extractValidDeltas(greenmountainOut).map((d) => ({ ...d, timestamp: new Date(Date.now() + 2).toISOString(), agent: "GreenMountain" })),
+        ...dedupDeltas(extractValidDeltas(bluelakeOut)).map((d) => ({ ...d, timestamp: ts, agent: "BlueLake" })),
+        ...dedupDeltas(extractValidDeltas(redforestOut)).map((d) => ({ ...d, timestamp: new Date(Date.now() + 1).toISOString(), agent: "RedForest" })),
+        ...dedupDeltas(extractValidDeltas(greenmountainOut)).map((d) => ({ ...d, timestamp: new Date(Date.now() + 2).toISOString(), agent: "GreenMountain" })),
       ];
 
       const killsThisRound = allDeltas.filter((d) => d.operation === "KILL").length;
@@ -8011,8 +8026,8 @@ Kill any hypothesis that cannot withstand scrutiny. Fewer strong hypotheses beat
         `This is Round ${round} (convergence). Kills must exceed adds. Finalize verdicts on all hypotheses.`;
 
       const artifactMd = renderArtifactMarkdown(artifact);
-      const buildRoundPrompt = (agentName: string, role: { systemPrompt: string; displayName: string }) =>
-        `You are ${agentName} (${role.displayName}) in a Brenner Protocol session.\n\n## Your Role\n${role.systemPrompt}\n\n## ${roundInstructions}\n\n## Current Artifact (v${artifact.metadata.version})\n\n${artifactMd}\n\n## Output Format\n\nRespond ONLY with delta blocks. Each delta is a JSON object in a \`\`\`delta fence.\nOne JSON object per fence. No arrays. No prose outside the delta blocks.\n\nValid operations: ADD (target_id: null), EDIT (target_id required), KILL (target_id required).\nValid sections: hypothesis_slate, discriminative_tests, assumption_ledger, anomaly_register,\n  adversarial_critique, research_thread, predictions_table.\n\nThe compiler assigns IDs (H1, H2, T1, A1, C1, etc.). Do not invent your own IDs.\nFor KILL, use the "reason" field (not "kill_reason").\n\nExample ADD (hypothesis):\n\`\`\`delta\n{\n  "operation": "ADD",\n  "section": "hypothesis_slate",\n  "target_id": null,\n  "payload": {\n    "name": "Short descriptive name",\n    "claim": "One falsifiable sentence.",\n    "mechanism": "Causal story explaining why it would be true.",\n    "anchors": ["[inference]"],\n    "third_alternative": false\n  },\n  "rationale": "Why this hypothesis is worth testing."\n}\n\`\`\`\n\nExample ADD (adversarial critique):\n\`\`\`delta\n{\n  "operation": "ADD",\n  "section": "adversarial_critique",\n  "target_id": null,\n  "payload": {\n    "attack": "What assumption or hypothesis is being challenged.",\n    "evidence": "Why the assumption may be wrong.",\n    "real_third_alternative": false\n  },\n  "rationale": "Why this critique is discriminative."\n}\n\`\`\`\n\nExample EDIT:\n\`\`\`delta\n{\n  "operation": "EDIT",\n  "section": "research_thread",\n  "target_id": "RT",\n  "payload": { "statement": "Updated framing after new evidence." },\n  "rationale": "[inference]"\n}\n\`\`\`\n\nExample KILL:\n\`\`\`delta\n{\n  "operation": "KILL",\n  "section": "hypothesis_slate",\n  "target_id": "H1",\n  "payload": { "reason": "Fails T2: mechanism requires X but X is ruled out by Y." },\n  "rationale": "[inference from test results]"\n}\n\`\`\`\n`;
+      const buildRoundPrompt = (agentName: string, role: { description: string; displayName: string }) =>
+        `You are ${agentName} (${role.displayName}) in a Brenner Protocol session.\n\n## Your Role\n${role.description}\n\n## ${roundInstructions}\n\n## Current Artifact (v${artifact.metadata.version})\n\n${artifactMd}\n\n## Output Format\n\nRespond ONLY with delta blocks. Each delta is a JSON object in a \`\`\`delta fence.\nOne JSON object per fence. No arrays. No prose outside the delta blocks.\n\nValid operations: ADD (target_id: null), EDIT (target_id required), KILL (target_id required).\nValid sections: hypothesis_slate, discriminative_tests, assumption_ledger, anomaly_register,\n  adversarial_critique, research_thread, predictions_table.\n\nThe compiler assigns IDs (H1, H2, T1, A1, C1, etc.). Do not invent your own IDs.\nFor KILL, use the "reason" field (not "kill_reason").\n\nExample ADD (hypothesis):\n\`\`\`delta\n{\n  "operation": "ADD",\n  "section": "hypothesis_slate",\n  "target_id": null,\n  "payload": {\n    "name": "Short descriptive name",\n    "claim": "One falsifiable sentence.",\n    "mechanism": "Causal story explaining why it would be true.",\n    "anchors": ["[inference]"],\n    "third_alternative": false\n  },\n  "rationale": "Why this hypothesis is worth testing."\n}\n\`\`\`\n\nExample ADD (adversarial critique):\n\`\`\`delta\n{\n  "operation": "ADD",\n  "section": "adversarial_critique",\n  "target_id": null,\n  "payload": {\n    "attack": "What assumption or hypothesis is being challenged.",\n    "evidence": "Why the assumption may be wrong.",\n    "real_third_alternative": false\n  },\n  "rationale": "Why this critique is discriminative."\n}\n\`\`\`\n\nExample EDIT:\n\`\`\`delta\n{\n  "operation": "EDIT",\n  "section": "research_thread",\n  "target_id": "RT",\n  "payload": { "statement": "Updated framing after new evidence." },\n  "rationale": "[inference]"\n}\n\`\`\`\n\nExample KILL:\n\`\`\`delta\n{\n  "operation": "KILL",\n  "section": "hypothesis_slate",\n  "target_id": "H1",\n  "payload": { "reason": "Fails T2: mechanism requires X but X is ruled out by Y." },\n  "rationale": "[inference from test results]"\n}\n\`\`\`\n`;
 
       bluelakePrompt      = buildRoundPrompt("BlueLake",      roles.BlueLake);
       redforestPrompt     = buildRoundPrompt("RedForest",     roles.RedForest);
@@ -8158,10 +8173,23 @@ Kill any hypothesis that cannot withstand scrutiny. Fewer strong hypotheses beat
       }
     }
 
+    // Deduplicate within each agent's output — Codex sometimes echoes its full prompt before the
+    // response, causing every delta block to appear twice. Collapse identical (op+section+payload)
+    // tuples, keeping the first occurrence.
+    const deduplicateDeltas = (deltas: ValidDelta[]): ValidDelta[] => {
+      const seen = new Set<string>();
+      return deltas.filter((d) => {
+        const key = `${d.operation}|${d.section}|${d.target_id ?? "null"}|${JSON.stringify(d.payload)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
+
     const allDeltas: (ValidDelta & { timestamp: string; agent: string })[] = [
-      ...bluelakeDeltas.map((d) => ({ ...d, timestamp: ts, agent: "BlueLake" })),
-      ...redforestDeltas.map((d) => ({ ...d, timestamp: new Date(Date.now() + 1).toISOString(), agent: "RedForest" })),
-      ...greenmountainDeltas.map((d) => ({ ...d, timestamp: new Date(Date.now() + 2).toISOString(), agent: "GreenMountain" })),
+      ...deduplicateDeltas(bluelakeDeltas).map((d) => ({ ...d, timestamp: ts, agent: "BlueLake" })),
+      ...deduplicateDeltas(redforestDeltas).map((d) => ({ ...d, timestamp: new Date(Date.now() + 1).toISOString(), agent: "RedForest" })),
+      ...deduplicateDeltas(greenmountainDeltas).map((d) => ({ ...d, timestamp: new Date(Date.now() + 2).toISOString(), agent: "GreenMountain" })),
     ];
 
     const killsThisRound = allDeltas.filter((d) => d.operation === "KILL").length;
@@ -8170,7 +8198,10 @@ Kill any hypothesis that cannot withstand scrutiny. Fewer strong hypotheses beat
 
     // Merge and set version
     const mergeResult = mergeArtifactWithTimestamps(artifact, allDeltas);
-    artifact = mergeResult.artifact;
+    artifact = mergeResult.artifact; // always use the partial artifact (failed deltas were skipped)
+    if (!mergeResult.ok) {
+      process.stderr.write(`  ⚠ Merge errors: ${mergeResult.errors.map((e: any) => e.message).join(", ")}\n`);
+    }
     artifact.metadata.version = round;
 
     // Lint + auto-patch
@@ -8183,16 +8214,20 @@ Kill any hypothesis that cannot withstand scrutiny. Fewer strong hypotheses beat
         // EH-001 auto-patch only fires in early rounds (< 3). In convergence rounds, kills > adds
         // is the correct signal — padding with placeholders just creates noise and blocks convergence.
         if (v.id === "EH-001" && active.length < 3 && round < 3) {
-          patches.push({ valid: true, operation: "ADD", section: "hypothesis_slate", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Synthesis Hypothesis", claim: "The surviving hypotheses are complementary and should be unified into a single operational model.", mechanism: "Auto-generated synthesis to satisfy convergence minimum. Operator should refine.", third_alternative: true }, rationale: "[auto-patch: EH-001]", raw: "[auto-patch]" });
+          patches.push({ valid: true, operation: "ADD", section: "hypothesis_slate", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Synthesis Hypothesis", claim: "The surviving hypotheses are complementary and should be unified into a single operational model.", mechanism: "Auto-generated synthesis to satisfy convergence minimum. Operator should refine.", third_alternative: true, _auto_patch: true }, rationale: "[auto-patch: EH-001]", raw: "[auto-patch]" });
         }
-        if (v.id === "EA-001") {
-          patches.push({ valid: true, operation: "ADD", section: "assumption_ledger", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Market scale ceiling", claim: "The addressable market is bounded by the size of the target user population.", type: "scale_check", status: "active" }, rationale: "[auto-patch: EA-001]", raw: "[auto-patch]" });
+        // EA-001: only patch if the section has NO items at all (not even killed ones).
+        // If items exist (even killed), agents have already engaged with the section — adding
+        // another placeholder just creates a loop of kill-then-repatch every round.
+        if (v.id === "EA-001" && Object.values(artifact.sections.assumption_ledger ?? {}).length === 0) {
+          patches.push({ valid: true, operation: "ADD", section: "assumption_ledger", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Market scale ceiling", claim: "The addressable market is bounded by the size of the target user population.", type: "scale_check", status: "active", _auto_patch: true }, rationale: "[auto-patch: EA-001]", raw: "[auto-patch]" });
         }
-        if (v.id === "EC-001") {
-          patches.push({ valid: true, operation: "ADD", section: "adversarial_critique", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Hidden third alternative", claim: "Both the primary hypotheses may be wrong if a simpler underlying mechanism is being overlooked.", severity: "major", real_third_alternative: true }, rationale: "[auto-patch: EC-001]", raw: "[auto-patch]" });
+        // EC-001: same guard — only patch when section is completely empty.
+        if (v.id === "EC-001" && Object.values(artifact.sections.adversarial_critique ?? {}).length === 0) {
+          patches.push({ valid: true, operation: "ADD", section: "adversarial_critique", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Hidden third alternative", claim: "Both the primary hypotheses may be wrong if a simpler underlying mechanism is being overlooked.", severity: "major", real_third_alternative: true, _auto_patch: true }, rationale: "[auto-patch: EC-001]", raw: "[auto-patch]" });
         }
         if (v.id === "ER-001" && !(artifact.sections as any).research_thread?.statement) {
-          patches.push({ valid: true, operation: "EDIT", section: "research_thread", target_id: "RT", timestamp: patchTs, agent: "SilentRiver", payload: { statement: asStringFlag(flags, "question") ?? "See context.", why_it_matters: "Determines which hypotheses survive rigorous adversarial testing." }, rationale: "[auto-patch: ER-001]", raw: "[auto-patch]" });
+          patches.push({ valid: true, operation: "EDIT", section: "research_thread", target_id: "RT", timestamp: patchTs, agent: "SilentRiver", payload: { statement: asStringFlag(flags, "question") ?? "See context.", why_it_matters: "Determines which hypotheses survive rigorous adversarial testing.", _auto_patch: true }, rationale: "[auto-patch: ER-001]", raw: "[auto-patch]" });
         }
       }
       if (patches.length > 0) {
