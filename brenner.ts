@@ -7470,6 +7470,49 @@ Valid sections: hypothesis_slate, discriminative_tests, assumption_ledger, anoma
 The compiler assigns IDs (H1, H2, T1, A1, C1, etc.). Do not invent your own IDs.
 For KILL, use the "reason" field (not "kill_reason").
 
+Example ADD (hypothesis):
+\`\`\`delta
+{
+  "operation": "ADD",
+  "section": "hypothesis_slate",
+  "target_id": null,
+  "payload": {
+    "name": "Short descriptive name",
+    "claim": "One falsifiable sentence.",
+    "mechanism": "Causal story explaining why it would be true.",
+    "anchors": ["[inference]"],
+    "third_alternative": false
+  },
+  "rationale": "Why this hypothesis is worth testing."
+}
+\`\`\`
+
+Example ADD (adversarial critique):
+\`\`\`delta
+{
+  "operation": "ADD",
+  "section": "adversarial_critique",
+  "target_id": null,
+  "payload": {
+    "attack": "What assumption or hypothesis is being challenged.",
+    "evidence": "Why the assumption may be wrong.",
+    "real_third_alternative": false
+  },
+  "rationale": "Why this critique is discriminative."
+}
+\`\`\`
+
+Example EDIT:
+\`\`\`delta
+{
+  "operation": "EDIT",
+  "section": "research_thread",
+  "target_id": "RT",
+  "payload": { "statement": "Updated framing after new evidence." },
+  "rationale": "[inference]"
+}
+\`\`\`
+
 Example KILL:
 \`\`\`delta
 {
@@ -7894,7 +7937,7 @@ Kill any hypothesis that cannot withstand scrutiny. Fewer strong hypotheses beat
 
       const artifactMd = renderArtifactMarkdown(artifact);
       const buildRoundPrompt = (agentName: string, role: { systemPrompt: string; displayName: string }) =>
-        `You are ${agentName} (${role.displayName}) in a Brenner Protocol session.\n\n## Your Role\n${role.systemPrompt}\n\n## ${roundInstructions}\n\n## Current Artifact (v${artifact.metadata.version})\n\n${artifactMd}\n\n## Output Format\n\nRespond ONLY with delta blocks. Each delta is a JSON object in a \`\`\`delta fence.\nOne JSON object per fence. No arrays. No prose outside the delta blocks.\n\nValid operations: ADD (target_id: null), EDIT (target_id required), KILL (target_id required).\nValid sections: hypothesis_slate, discriminative_tests, assumption_ledger, anomaly_register,\n  adversarial_critique, research_thread, predictions_table.\n\nThe compiler assigns IDs (H1, H2, T1, A1, C1, etc.). Do not invent your own IDs.\nFor KILL, use the "reason" field (not "kill_reason").\n\nExample KILL:\n\`\`\`delta\n{\n  "operation": "KILL",\n  "section": "hypothesis_slate",\n  "target_id": "H1",\n  "payload": { "reason": "Fails T2: mechanism requires X but X is ruled out by Y." },\n  "rationale": "[inference from test results]"\n}\n\`\`\`\n`;
+        `You are ${agentName} (${role.displayName}) in a Brenner Protocol session.\n\n## Your Role\n${role.systemPrompt}\n\n## ${roundInstructions}\n\n## Current Artifact (v${artifact.metadata.version})\n\n${artifactMd}\n\n## Output Format\n\nRespond ONLY with delta blocks. Each delta is a JSON object in a \`\`\`delta fence.\nOne JSON object per fence. No arrays. No prose outside the delta blocks.\n\nValid operations: ADD (target_id: null), EDIT (target_id required), KILL (target_id required).\nValid sections: hypothesis_slate, discriminative_tests, assumption_ledger, anomaly_register,\n  adversarial_critique, research_thread, predictions_table.\n\nThe compiler assigns IDs (H1, H2, T1, A1, C1, etc.). Do not invent your own IDs.\nFor KILL, use the "reason" field (not "kill_reason").\n\nExample ADD (hypothesis):\n\`\`\`delta\n{\n  "operation": "ADD",\n  "section": "hypothesis_slate",\n  "target_id": null,\n  "payload": {\n    "name": "Short descriptive name",\n    "claim": "One falsifiable sentence.",\n    "mechanism": "Causal story explaining why it would be true.",\n    "anchors": ["[inference]"],\n    "third_alternative": false\n  },\n  "rationale": "Why this hypothesis is worth testing."\n}\n\`\`\`\n\nExample ADD (adversarial critique):\n\`\`\`delta\n{\n  "operation": "ADD",\n  "section": "adversarial_critique",\n  "target_id": null,\n  "payload": {\n    "attack": "What assumption or hypothesis is being challenged.",\n    "evidence": "Why the assumption may be wrong.",\n    "real_third_alternative": false\n  },\n  "rationale": "Why this critique is discriminative."\n}\n\`\`\`\n\nExample EDIT:\n\`\`\`delta\n{\n  "operation": "EDIT",\n  "section": "research_thread",\n  "target_id": "RT",\n  "payload": { "statement": "Updated framing after new evidence." },\n  "rationale": "[inference]"\n}\n\`\`\`\n\nExample KILL:\n\`\`\`delta\n{\n  "operation": "KILL",\n  "section": "hypothesis_slate",\n  "target_id": "H1",\n  "payload": { "reason": "Fails T2: mechanism requires X but X is ruled out by Y." },\n  "rationale": "[inference from test results]"\n}\n\`\`\`\n`;
 
       bluelakePrompt      = buildRoundPrompt("BlueLake",      roles.BlueLake);
       redforestPrompt     = buildRoundPrompt("RedForest",     roles.RedForest);
