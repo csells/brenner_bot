@@ -8180,17 +8180,19 @@ Kill any hypothesis that cannot withstand scrutiny. Fewer strong hypotheses beat
       const patchTs = new Date().toISOString();
       for (const v of report.violations.filter((v) => v.severity === "error")) {
         const active = Object.values(artifact.sections.hypothesis_slate ?? {}).filter((h: any) => !h.killed);
-        if (v.id === "EH-001" && active.length < 3) {
-          patches.push({ valid: true, operation: "ADD", section: "hypothesis_slate", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Synthesis Hypothesis", claim: "The surviving hypotheses are complementary and should be unified into a single operational model.", mechanism: "Auto-generated synthesis to satisfy convergence minimum. Operator should refine.", third_alternative: true }, rationale: "[auto-patch: EH-001]" });
+        // EH-001 auto-patch only fires in early rounds (< 3). In convergence rounds, kills > adds
+        // is the correct signal — padding with placeholders just creates noise and blocks convergence.
+        if (v.id === "EH-001" && active.length < 3 && round < 3) {
+          patches.push({ valid: true, operation: "ADD", section: "hypothesis_slate", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Synthesis Hypothesis", claim: "The surviving hypotheses are complementary and should be unified into a single operational model.", mechanism: "Auto-generated synthesis to satisfy convergence minimum. Operator should refine.", third_alternative: true }, rationale: "[auto-patch: EH-001]", raw: "[auto-patch]" });
         }
         if (v.id === "EA-001") {
-          patches.push({ valid: true, operation: "ADD", section: "assumption_ledger", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Market scale ceiling", claim: "The addressable market is bounded by the size of the target user population.", type: "scale_check", status: "active" }, rationale: "[auto-patch: EA-001]" });
+          patches.push({ valid: true, operation: "ADD", section: "assumption_ledger", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Market scale ceiling", claim: "The addressable market is bounded by the size of the target user population.", type: "scale_check", status: "active" }, rationale: "[auto-patch: EA-001]", raw: "[auto-patch]" });
         }
         if (v.id === "EC-001") {
-          patches.push({ valid: true, operation: "ADD", section: "adversarial_critique", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Hidden third alternative", claim: "Both the primary hypotheses may be wrong if a simpler underlying mechanism is being overlooked.", severity: "major", real_third_alternative: true }, rationale: "[auto-patch: EC-001]" });
+          patches.push({ valid: true, operation: "ADD", section: "adversarial_critique", target_id: null, timestamp: patchTs, agent: "SilentRiver", payload: { name: "Hidden third alternative", claim: "Both the primary hypotheses may be wrong if a simpler underlying mechanism is being overlooked.", severity: "major", real_third_alternative: true }, rationale: "[auto-patch: EC-001]", raw: "[auto-patch]" });
         }
         if (v.id === "ER-001" && !(artifact.sections as any).research_thread?.statement) {
-          patches.push({ valid: true, operation: "EDIT", section: "research_thread", target_id: "RT", timestamp: patchTs, agent: "SilentRiver", payload: { statement: asStringFlag(flags, "question") ?? "See context.", why_it_matters: "Determines which hypotheses survive rigorous adversarial testing." }, rationale: "[auto-patch: ER-001]" });
+          patches.push({ valid: true, operation: "EDIT", section: "research_thread", target_id: "RT", timestamp: patchTs, agent: "SilentRiver", payload: { statement: asStringFlag(flags, "question") ?? "See context.", why_it_matters: "Determines which hypotheses survive rigorous adversarial testing." }, rationale: "[auto-patch: ER-001]", raw: "[auto-patch]" });
         }
       }
       if (patches.length > 0) {
@@ -8217,12 +8219,13 @@ Kill any hypothesis that cannot withstand scrutiny. Fewer strong hypotheses beat
     if (round >= 3) {
       if (killsThisRound <= addsThisRound) {
         convergedReason = `kills (${killsThisRound}) <= adds (${addsThisRound})`;
-      } else if (activeHyps.length < 3) {
-        convergedReason = `only ${activeHyps.length} active hypotheses`;
       } else {
-        // Converged on kill-rate + hypothesis count. third_alternative flags are advisory.
+        // Converged: kills > adds. Hypothesis count is not a convergence gate —
+        // a session that legitimately narrows to 1-2 strong survivors should not be
+        // blocked by a placeholder floor. third_alternative flags are advisory.
         converged = true;
-        convergedReason = "kills > adds, ≥3 active hypotheses";
+        convergedReason = "kills > adds";
+        if (activeHyps.length < 2) convergenceWarnings.push(`only ${activeHyps.length} active hypothesis remaining — consider whether the question is fully resolved`);
         if (!hasThirdAlt)     convergenceWarnings.push("no third_alternative hypothesis — agents should propose one");
         if (!hasRealThirdAlt) convergenceWarnings.push("no real_third_alternative critique — agents should add one");
       }
@@ -8465,7 +8468,7 @@ Rules:
           score: d.points,
           maxScore: d.maxPoints,
           suggestion: suggestions[dim.key] ?? "Improve this dimension.",
-          brennerQuote: dim.quoteKey ? BRENNER_QUOTES[dim.quoteKey] : undefined,
+          brennerQuote: (dim as any).quoteKey ? BRENNER_QUOTES[(dim as any).quoteKey] : undefined,
         });
       }
     }
