@@ -24,9 +24,10 @@ A single LLM asked to evaluate N hypotheses will hedge every one. Three agents i
 ```
 <project-root>/
   brenner/
+    excerpt.md              ← Brenner corpus quotes — shared, read-only, concurrent-safe
+    killed-hypotheses.md    ← cross-session kill registry (created on first verdict)
     RS-YYYYMMDD-<slug>/
       context.md              ← research question + background (required)
-      excerpt.md              ← Brenner transcript quotes (required)
       artifact.md             ← compiled output, updated after each round
       verdict.md              ← plain-language answer, written at session end
       session_state.json      ← resumable state
@@ -35,7 +36,7 @@ A single LLM asked to evaluate N hypotheses will hedge every one. Three agents i
       stress_test/            ← post-convergence adversarial pass
 ```
 
-`RS` = Research Session. Use today's date.
+`RS` = Research Session. Use today's date. **Multiple sessions can run concurrently** — each has its own isolated directory. The CLI operates on `--session-dir` with no global state. `brenner/excerpt.md` is passed via `--excerpt-file` and read by any number of sessions in parallel.
 
 ---
 
@@ -77,7 +78,7 @@ Then write the proposed `--question` string and a one-paragraph context summary.
 
 Ground the session in Brenner's actual method by searching his transcript corpus for quotes relevant to the research question. This injects his reasoning style — not just a summary of it — into the agents' context.
 
-Pass the excerpt to `round build` via `--excerpt-file $SESSION/excerpt.md`. The CLI enforces that this file exists before running. If it's missing, `round build` exits with exact instructions — corpus search commands, excerpt build commands, and the `touch $SESSION/excerpt.md` escape hatch if you genuinely want to skip.
+Build the excerpt once per project and store it at `brenner/excerpt.md`. Pass it to every `round build` call via `--excerpt-file $(pwd)/brenner/excerpt.md`. The file is shared across all sessions — never copied, never written during a session. The CLI enforces that the file exists before running. If it's missing, `round build` exits with exact instructions — corpus search commands, excerpt build commands, and the `touch brenner/excerpt.md` escape hatch if you genuinely want to skip.
 
 The excerpt is injected into all three agents' **round 1 prompts only**. Without it, agents apply the Brenner operators from description alone. With it, they apply them from example — a meaningful difference in how they reason in round 1, which shapes the hypotheses and framing that carry into subsequent rounds.
 
@@ -128,7 +129,7 @@ brenner round build \
   --session-dir $(pwd)/$SESSION \
   --round N \
   --question "Your research question with explicit evaluation criteria" \
-  --excerpt-file $SESSION/excerpt.md
+  --excerpt-file $(pwd)/brenner/excerpt.md
 ```
 
 Writes `round_N/{bluelake,redforest,greenmountain}_prompt.md`.
