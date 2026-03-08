@@ -7939,6 +7939,15 @@ Rules:
       redforestPrompt     = messages.find((m) => m.to === "RedForest")!.body;
       greenmountainPrompt = messages.find((m) => m.to === "GreenMountain")!.body;
 
+      // Strip the Agent Mail "Response Format" section from kickoff prompts —
+      // it instructs agents to write prose + deltas, which contradicts the Robot Mode
+      // requirement of delta-only output. Replace it entirely with the Robot Mode format.
+      const stripAgentMailFormat = (s: string) =>
+        s.replace(/\n## Response Format\n[\s\S]*$/, "");
+      bluelakePrompt      = stripAgentMailFormat(bluelakePrompt);
+      redforestPrompt     = stripAgentMailFormat(redforestPrompt);
+      greenmountainPrompt = stripAgentMailFormat(greenmountainPrompt);
+
       // Append robot-mode output format instructions to kickoff prompts.
       // composeKickoffMessages uses the Beads/Agent Mail format which lacks
       // the delta JSON examples needed for Codex and Gemini to produce valid output.
