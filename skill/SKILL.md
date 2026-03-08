@@ -73,7 +73,25 @@ Then write the proposed `--question` string and a one-paragraph context summary.
 
 ---
 
-## Step 0b — Check the kill registry
+## Step 0b — Build a corpus excerpt (recommended)
+
+Ground the session in Brenner's actual method by searching his transcript corpus for quotes relevant to the research question. This injects his reasoning style — not just a summary of it — into the agents' context.
+
+```bash
+# Search the corpus for relevant sections
+brenner corpus search "your topic keywords" --limit 5
+
+# Build an excerpt from the sections that look most relevant
+brenner excerpt build --sections 58,78,161 > $SESSION/excerpt.md
+```
+
+The `excerpt.md` file is automatically picked up by `round build` and injected into all three agents' prompts. Without it, agents apply the Brenner operators from description alone. With it, they apply them from example — there's a meaningful difference in how they reason.
+
+**When to skip**: if the research question is purely a business/market/product decision and the biological or experimental science framing would distort rather than help. In that case, omit `excerpt.md` entirely — agents will still follow the operator algebra from the kernel.
+
+---
+
+## Step 0c — Check the kill registry
 
 Before writing `context.md`, check whether `brenner/killed-hypotheses.md` exists at the project root. This file accumulates kills across all sessions in the project.
 
