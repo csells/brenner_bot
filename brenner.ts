@@ -7442,6 +7442,18 @@ Kill any hypothesis that cannot withstand scrutiny. Fewer strong hypotheses beat
         `This is Round ${round} (convergence). Kills must exceed adds. Finalize verdicts on all hypotheses.`;
     }
 
+    function topScoredTests(artifact: Artifact, n = 3): string {
+      const tests = Object.values(artifact.sections.discriminative_tests ?? {}) as any[];
+      const active = tests.filter((t) => !t.killed && t.score);
+      if (active.length === 0) return "";
+      const scored = active
+        .map((t) => ({ name: t.name ?? t.id, score: (t.score.likelihood_ratio ?? 0) + (t.score.cost ?? 0) + (t.score.speed ?? 0) + (t.score.ambiguity ?? 0), discriminates: t.discriminates ?? "" }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, n);
+      const lines = scored.map((t) => `  - ${t.name} (${t.score}/12): ${t.discriminates}`).join("\n");
+      return `\n**Highest-value tests** (use these to drive your kills — don't ignore high-scoring discriminators):\n${lines}`;
+    }
+
     function buildRoundNPrompt(
       agentName: string,
       role: { role: AgentRole; description: string; displayName: string },
@@ -7461,9 +7473,11 @@ Kill any hypothesis that cannot withstand scrutiny. Fewer strong hypotheses beat
         ? `\n## Role Prompt (System)\n\n${roleSection}\n`
         : `\n## Your Role\n${role.description}\n`;
 
+      const testScoresBrief = topScoredTests(artifact);
+
       return `You are ${agentName} (${role.displayName}) in a Brenner Protocol session.
 ${kernelBlock}${roleSectionBlock}
-## ${getRoundInstructions(artifact.metadata.version + 1)}
+## ${getRoundInstructions(artifact.metadata.version + 1)}${testScoresBrief}
 
 ## Current Artifact (v${artifact.metadata.version})
 
@@ -7676,6 +7690,9 @@ Example KILL:
         warnings.push("no third_alternative hypothesis — agents should propose one");
       if (!hasRealThirdAlt)
         warnings.push("no real_third_alternative critique — agents should add one");
+      const predictions = Object.values(artifact.sections.predictions_table ?? {}).filter((p: any) => !p.killed);
+      if (predictions.length < 3)
+        warnings.push(`predictions table has only ${predictions.length} entries — hypotheses lack discrimination rows`);
 
       return { converged: true, reason: "kills > adds" + (warnings.length ? ` (warnings: ${warnings.join("; ")})` : "") };
     }
@@ -7722,18 +7739,27 @@ Rules:
       const promptFile = join(dir, "verdict_prompt.md");
       writeFileSync(promptFile, verdictPrompt);
 
+      // SilentRiver runs as an isolated subprocess — it only sees verdict_prompt.md,
+      // not the orchestrator's accumulated session context. Pass prompt via file for
+      // large artifacts (avoids OS arg-length limits).
       await new Promise<void>((resolve) => {
-        const child = spawn(claudeBin, ["--dangerously-skip-permissions", "--output-format", "text", "-p", verdictPrompt], {
+        const child = spawn(claudeBin, [
+          "--dangerously-skip-permissions",
+          "--output-format", "text",
+          "--model", "claude-opus-4-6",
+          "-p", `Read the file at ${promptFile} in full and respond to it exactly as instructed.`,
+        ], {
           env: { ...process.env, PATH: augmentedPath, CLAUDECODE: "", CLAUDE_CODE_ENTRYPOINT: "", AGENT_NAME: "SilentRiver" },
           maxBuffer: 5 * 1024 * 1024,
         });
         const chunks: Buffer[] = [];
         child.stdout?.on("data", (d: Buffer) => chunks.push(d));
-        child.on("error", (err: Error) => { stderrLine(`  ⚠ Verdict generation failed: ${err.message}`); resolve(); });
-        child.on("close", () => {
+        child.on("error", (err: Error) => { stderrLine(`  ⚠ SilentRiver failed to launch: ${err.message}`); resolve(); });
+        child.on("close", (code) => {
+          if (code !== 0 && code !== null) stderrLine(`  ⚠ SilentRiver exited ${code}`);
           const output = Buffer.concat(chunks).toString().trim();
           writeFileSync(verdictFile, output || "Verdict generation produced no output.");
-          stderrLine(`  ✓ verdict.md written`);
+          stderrLine(`  ✓ verdict.md written (SilentRiver, claude-opus-4-6)`);
           resolve();
         });
       });
