@@ -85,7 +85,7 @@ brenner corpus search "your topic keywords" --limit 5
 brenner excerpt build --sections 58,78,161 > $SESSION/excerpt.md
 ```
 
-The `excerpt.md` file is automatically picked up by `round build` and injected into all three agents' prompts. Without it, agents apply the Brenner operators from description alone. With it, they apply them from example — there's a meaningful difference in how they reason.
+The `excerpt.md` file is automatically picked up and injected into all three agents' **round 1 prompts only**. Rounds 2+ re-inject the kernel and role prompts but not the excerpt. Without it, agents apply the Brenner operators from description alone. With it, they apply them from example — there's a meaningful difference in how they reason in round 1, which shapes the hypotheses and framing that carry into subsequent rounds.
 
 **When to skip**: if the research question is purely a business/market/product decision and the biological or experimental science framing would distort rather than help. In that case, omit `excerpt.md` entirely — agents will still follow the operator algebra from the kernel.
 
