@@ -7326,8 +7326,42 @@ ${JSON.stringify(delta, null, 2)}
     const maxRounds = asIntFlag(flags, "max-rounds") ?? 5;
     const threadId = sessionDir.split("/").pop() ?? `RS-robot-${Date.now()}`;
 
-    const context = existsSync(contextFile) ? readFileSync(contextFile, "utf8") : "";
-    const excerpt = existsSync(excerptFile) ? readFileSync(excerptFile, "utf8") : "";
+    if (!existsSync(contextFile)) {
+      throw new Error(
+        `Missing context file: ${contextFile}\n\n` +
+        `context.md is required. It grounds the session in your specific research question and constraints.\n\n` +
+        `Create it now:\n` +
+        `  cat > ${contextFile} << 'EOF'\n` +
+        `  ## Research Question\n` +
+        `  <one sentence — what are you trying to decide or understand?>\n\n` +
+        `  ## Background\n` +
+        `  <2-4 sentences of essential context the agents need>\n\n` +
+        `  ## Evaluation Criteria\n` +
+        `  <what does a good answer look like? what constraints apply?>\n` +
+        `  EOF\n\n` +
+        `Without context.md, agents evaluate in a vacuum and produce generic debate instead of targeted analysis.`
+      );
+    }
+
+    if (!existsSync(excerptFile)) {
+      throw new Error(
+        `Missing excerpt file: ${excerptFile}\n\n` +
+        `excerpt.md grounds agents in Brenner's actual reasoning style — not just a description of it.\n` +
+        `Without it, agents apply the operators from instruction alone. With it, they apply them from example.\n\n` +
+        `Build one now:\n` +
+        `  # Search the corpus for relevant sections\n` +
+        `  brenner corpus search "your topic keywords" --limit 5\n\n` +
+        `  # Build an excerpt from the most relevant sections\n` +
+        `  brenner excerpt build --sections 58,78,161 > ${excerptFile}\n\n` +
+        `Or pass an existing excerpt file via --excerpt-file <path>.\n\n` +
+        `If you intentionally want to skip the excerpt (e.g. for a pure business/market question\n` +
+        `where biological framing would distort the analysis), create an empty file:\n` +
+        `  touch ${excerptFile}`
+      );
+    }
+
+    const context = readFileSync(contextFile, "utf8");
+    const excerpt = readFileSync(excerptFile, "utf8");
 
     // Resolve agent binaries — flags > env vars > PATH
     function resolveBin(flagName: string, envVar: string, defaultName: string): string {
@@ -7967,8 +8001,42 @@ Rules:
     const threadId    = sessionDir.split("/").pop() ?? `RS-robot-${Date.now()}`;
     const stateFile   = join(sessionDir, "session_state.json");
 
-    const context = existsSync(contextFile) ? readFileSync(contextFile, "utf8") : "";
-    const excerpt = existsSync(excerptFile) ? readFileSync(excerptFile, "utf8") : "";
+    if (!existsSync(contextFile)) {
+      throw new Error(
+        `Missing context file: ${contextFile}\n\n` +
+        `context.md is required. It grounds the session in your specific research question and constraints.\n\n` +
+        `Create it now:\n` +
+        `  cat > ${contextFile} << 'EOF'\n` +
+        `  ## Research Question\n` +
+        `  <one sentence — what are you trying to decide or understand?>\n\n` +
+        `  ## Background\n` +
+        `  <2-4 sentences of essential context the agents need>\n\n` +
+        `  ## Evaluation Criteria\n` +
+        `  <what does a good answer look like? what constraints apply?>\n` +
+        `  EOF\n\n` +
+        `Without context.md, agents evaluate in a vacuum and produce generic debate instead of targeted analysis.`
+      );
+    }
+
+    if (!existsSync(excerptFile)) {
+      throw new Error(
+        `Missing excerpt file: ${excerptFile}\n\n` +
+        `excerpt.md grounds agents in Brenner's actual reasoning style — not just a description of it.\n` +
+        `Without it, agents apply the operators from instruction alone. With it, they apply them from example.\n\n` +
+        `Build one now:\n` +
+        `  # Search the corpus for relevant sections\n` +
+        `  brenner corpus search "your topic keywords" --limit 5\n\n` +
+        `  # Build an excerpt from the most relevant sections\n` +
+        `  brenner excerpt build --sections 58,78,161 > ${excerptFile}\n\n` +
+        `Or pass an existing excerpt file via --excerpt-file <path>.\n\n` +
+        `If you intentionally want to skip the excerpt (e.g. for a pure business/market question\n` +
+        `where biological framing would distort the analysis), create an empty file:\n` +
+        `  touch ${excerptFile}`
+      );
+    }
+
+    const context = readFileSync(contextFile, "utf8");
+    const excerpt = readFileSync(excerptFile, "utf8");
 
     // Load or initialise artifact
     let artifact: Artifact = existsSync(stateFile)
