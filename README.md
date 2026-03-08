@@ -12,6 +12,63 @@
 
 ---
 
+## Robot Mode (`feat/robot-mode` branch)
+
+This branch adds an **orchestrator model** where Claude Code drives the full Brenner Protocol session loop — no Agent Mail, no Beads, no tmux. All you need is Claude Code, Codex CLI, and Gemini CLI installed.
+
+### How it works
+
+Three agents with incompatible mandates debate a research question across multiple rounds until only what survives adversarial pressure remains:
+
+| Agent | Model | Role |
+|-------|-------|------|
+| RedForest | Codex | Hypothesis Generator — adds, hunts paradoxes, always includes a third alternative |
+| BlueLake | Claude | Test Designer — designs discriminative tests that kill hypotheses |
+| GreenMountain | Gemini | Adversarial Critic — runs scale checks, kills theories that go ugly |
+
+Claude Code plays orchestrator + BlueLake (via Agent tool sub-agent) + SilentRiver (verdict). Codex and Gemini run as Bash subprocesses. No subprocess hang — the Agent tool spawns BlueLake via the SDK, not the CLI.
+
+### CLI commands (orchestrator mode)
+
+```bash
+# Build prompts for all three agents
+brenner round build \
+  --session-dir $(pwd)/brenner/RS-20260308-my-question \
+  --round 1 \
+  --question "Your research question with explicit evaluation criteria" \
+  --excerpt-file $(pwd)/brenner/excerpt.md
+
+# After running all three agents in parallel, merge their outputs
+brenner round close \
+  --session-dir $(pwd)/brenner/RS-20260308-my-question \
+  --round 1
+
+# After convergence, get the verdict prompt for SilentRiver
+brenner session verdict-prompt \
+  --session-dir $(pwd)/brenner/RS-20260308-my-question \
+  --question "..." > verdict_prompt.md
+```
+
+The CLI enforces that `context.md` and `excerpt.md` exist before running — missing either exits with exact instructions on how to create them.
+
+### Requirements
+
+- `context.md` in the session directory — research question + background
+- `excerpt.md` at the project root — Brenner corpus quotes (build once, shared across sessions)
+- `~/.local/bin/codex` — Codex CLI
+- `~/.local/bin/gemini` — Gemini CLI
+- Claude Code as the orchestrator
+
+### Multiple concurrent sessions
+
+Each session is fully isolated in its own `brenner/RS-YYYYMMDD-<slug>/` directory. The CLI has no global state — `--session-dir` is the only scope. Run as many sessions in parallel as you have questions.
+
+### See also
+
+- `skill/SKILL.md` — complete orchestrator workflow (framing interview → rounds → stress test → verdict)
+
+---
+
 **Brenner Bot is a research "seed crystal"**: a curated primary-source corpus (Sydney Brenner transcripts) plus multi-model syntheses, powering **collaborative scientific research conversations** that follow the "Brenner approach."
 
 > 📊 **[End-to-End Test Report: Bio-Inspired Nanochat Session](./ANALYSIS_OF_USING_BRENNERBOT_FOR_BIO_INSPIRED_NANOCHAT.md)** — A complete walkthrough demonstrating the Brenner method in action on a real research question about biological vs. synthetic nanoparticle communication.
