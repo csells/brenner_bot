@@ -7965,6 +7965,16 @@ Valid sections: hypothesis_slate, discriminative_tests, assumption_ledger, anoma
 The compiler assigns IDs (H1, H2, T1, A1, C1, etc.). Do not invent your own IDs.
 For KILL, use the "reason" field (not "kill_reason").
 
+**CRITICAL — where to put your reasoning:**
+The \`rationale\` field is metadata only. It is NOT compiled into the artifact and will NOT
+be visible to other agents or to you in subsequent rounds. Your full argument MUST go in
+the payload content fields — those are the only fields that survive into the shared artifact:
+- Hypotheses: write your full causal argument in \`mechanism\` (not a one-liner)
+- Critiques: write the complete attack and supporting evidence in \`attack\` and \`evidence\`
+- Tests: write the complete procedure and discrimination logic in \`procedure\` and \`discriminates\`
+- Kills: write the full kill argument in \`reason\` (this IS compiled and visible to all agents)
+Write \`"rationale": "[inference]"\` as a stub — your reasoning goes in the payload.
+
 Example ADD (hypothesis):
 \`\`\`delta
 {
@@ -7974,11 +7984,11 @@ Example ADD (hypothesis):
   "payload": {
     "name": "Short descriptive name",
     "claim": "One falsifiable sentence.",
-    "mechanism": "Causal story explaining why it would be true.",
+    "mechanism": "Full causal argument: what drives the effect, why this mechanism and not alternatives, what the failure mode would look like, and what evidence would confirm or refute it.",
     "anchors": ["[inference]"],
     "third_alternative": false
   },
-  "rationale": "Why this hypothesis is worth testing."
+  "rationale": "[inference]"
 }
 \`\`\`
 
@@ -7989,11 +7999,11 @@ Example ADD (adversarial critique):
   "section": "adversarial_critique",
   "target_id": null,
   "payload": {
-    "attack": "What assumption or hypothesis is being challenged.",
-    "evidence": "Why the assumption may be wrong.",
+    "attack": "The specific assumption or hypothesis being challenged, and the logical structure of the attack.",
+    "evidence": "Concrete evidence or reasoning showing why the assumption is wrong or the hypothesis fails. Include scale checks, analogies, or structural arguments.",
     "real_third_alternative": false
   },
-  "rationale": "Why this critique is discriminative."
+  "rationale": "[inference]"
 }
 \`\`\`
 
@@ -8014,8 +8024,8 @@ Example KILL:
   "operation": "KILL",
   "section": "hypothesis_slate",
   "target_id": "H1",
-  "payload": { "reason": "Fails T2: mechanism requires X but X is ruled out by Y." },
-  "rationale": "[inference from test results]"
+  "payload": { "reason": "Full kill argument: which test or evidence rules this out, what the forbidden pattern is, and why no rescue is possible without changing the hypothesis class." },
+  "rationale": "[inference]"
 }
 \`\`\`
 `;
