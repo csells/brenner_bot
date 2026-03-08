@@ -28,6 +28,7 @@ import {
   AGENT_ROLES,
   composeKickoffMessages,
   getTriangulatedBrennerKernelMarkdown,
+  getRolePromptMarkdown,
   type AgentRole,
   type KickoffConfig,
 } from "./apps/web/src/lib/session-kickoff";
@@ -7443,15 +7444,25 @@ Kill any hypothesis that cannot withstand scrutiny. Fewer strong hypotheses beat
 
     function buildRoundNPrompt(
       agentName: string,
-      role: { description: string; displayName: string },
+      role: { role: AgentRole; description: string; displayName: string },
       artifact: Artifact,
     ): string {
       const artifactMd = renderArtifactMarkdown(artifact);
+      const kernel = getTriangulatedBrennerKernelMarkdown();
+      const roleSection = getRolePromptMarkdown(role.role);
+
+      // Re-inject kernel + role section every round. In Agent Mail mode agents retain
+      // these via thread history. In robot mode each round is a fresh context window —
+      // without re-injection, agents default to generic debate instead of Brenner operators.
+      const kernelBlock = kernel
+        ? `\n## Triangulated Brenner Kernel\n\n${kernel}\n`
+        : "";
+      const roleSectionBlock = roleSection
+        ? `\n## Role Prompt (System)\n\n${roleSection}\n`
+        : `\n## Your Role\n${role.description}\n`;
+
       return `You are ${agentName} (${role.displayName}) in a Brenner Protocol session.
-
-## Your Role
-${role.description}
-
+${kernelBlock}${roleSectionBlock}
 ## ${getRoundInstructions(artifact.metadata.version + 1)}
 
 ## Current Artifact (v${artifact.metadata.version})
@@ -7480,7 +7491,13 @@ the payload content fields — those are the only fields that survive into the s
 - Kills: write the full kill argument in \`reason\` (this IS compiled and visible to all agents)
 Write \`"rationale": "[inference]"\` as a stub — your reasoning goes in the payload.
 
-Example ADD (hypothesis):
+**Predictions table mandate:**
+For every hypothesis you ADD, you MUST also ADD a \`predictions_table\` row specifying
+what observable outcome this hypothesis predicts differently from the alternatives.
+The predictions table is the core discrimination tool — without it, tests cannot be
+linked to hypothesis-killing. A prediction must be specific enough to verify.
+
+Example ADD (hypothesis + paired prediction):
 \`\`\`delta
 {
   "operation": "ADD",
@@ -7492,6 +7509,18 @@ Example ADD (hypothesis):
     "mechanism": "Full causal argument: what drives the effect, why this mechanism and not alternatives, what the failure mode would look like, and what evidence would confirm or refute it.",
     "anchors": ["[inference]"],
     "third_alternative": false
+  },
+  "rationale": "[inference]"
+}
+\`\`\`
+\`\`\`delta
+{
+  "operation": "ADD",
+  "section": "predictions_table",
+  "target_id": null,
+  "payload": {
+    "condition": "Observable condition or measurement that discriminates hypotheses",
+    "predictions": { "H1": "expected outcome if H1 is true", "H2": "expected outcome if H2 is true" }
   },
   "rationale": "[inference]"
 }
@@ -7989,7 +8018,13 @@ the payload content fields — those are the only fields that survive into the s
 - Kills: write the full kill argument in \`reason\` (this IS compiled and visible to all agents)
 Write \`"rationale": "[inference]"\` as a stub — your reasoning goes in the payload.
 
-Example ADD (hypothesis):
+**Predictions table mandate:**
+For every hypothesis you ADD, you MUST also ADD a \`predictions_table\` row specifying
+what observable outcome this hypothesis predicts differently from the alternatives.
+The predictions table is the core discrimination tool — without it, tests cannot be
+linked to hypothesis-killing. A prediction must be specific enough to verify.
+
+Example ADD (hypothesis + paired prediction):
 \`\`\`delta
 {
   "operation": "ADD",
@@ -8001,6 +8036,18 @@ Example ADD (hypothesis):
     "mechanism": "Full causal argument: what drives the effect, why this mechanism and not alternatives, what the failure mode would look like, and what evidence would confirm or refute it.",
     "anchors": ["[inference]"],
     "third_alternative": false
+  },
+  "rationale": "[inference]"
+}
+\`\`\`
+\`\`\`delta
+{
+  "operation": "ADD",
+  "section": "predictions_table",
+  "target_id": null,
+  "payload": {
+    "condition": "Observable condition or measurement that discriminates hypotheses",
+    "predictions": { "H1": "expected outcome if H1 is true", "H2": "expected outcome if H2 is true" }
   },
   "rationale": "[inference]"
 }

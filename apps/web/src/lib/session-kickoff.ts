@@ -277,7 +277,7 @@ function rolePromptMarkers(role: AgentRole): { start: string; end: string } {
   };
 }
 
-function getRolePromptMarkdown(role: AgentRole): string | null {
+export function getRolePromptMarkdown(role: AgentRole): string | null {
   if (rolePromptCache.has(role)) return rolePromptCache.get(role) ?? null;
 
   const spec = readRolePromptsSpecMarkdown();
