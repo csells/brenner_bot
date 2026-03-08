@@ -431,4 +431,4 @@ Inject these into any manual prompt:
 - `../apps/web/src/lib/artifact-merge.ts` — Linter, artifact schema, merge algorithm
 - `../apps/web/src/lib/delta-parser.ts` — Delta parsing and validation
 - `../apps/web/src/lib/session-kickoff.ts` — Kickoff message composition, agent roles
-- `../brenner.ts` — Full CLI including `session robot`, `round build`, `round close`, `session verdict-prompt`
+- `../brenner.ts` — Full CLI: `round build`, `round close`, `session verdict-prompt` (orchestrator mode)
