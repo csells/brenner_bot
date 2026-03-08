@@ -120,15 +120,45 @@ brenner round build \
 
 Writes `round_N/{bluelake,redforest,greenmountain}_prompt.md`.
 
-**Run agents** — the simplest path is one automated round at a time:
-```bash
-brenner session robot \
-  --session-dir $(pwd)/$SESSION \
-  --question "..." \
-  --max-rounds 1
+**Run all three agents in parallel** — issue all three simultaneously, wait for all to complete before closing.
+
+_BlueLake (Claude sub-agent via Agent tool) — NEVER write this inline:_
+
+Use the Agent tool every round, no exceptions. Do not write BlueLake's delta output yourself. The sub-agent gets context isolation — it sees only `bluelake_prompt.md`, not your accumulated session context. That isolation is the point.
+
+```
+Agent tool:
+  subagent_type: general-purpose
+  prompt: Read the file at <absolute path to round_N/bluelake_prompt.md> in full,
+          then respond to it exactly as instructed. Output ONLY delta fenced JSON blocks.
+  description: "BlueLake round N"
 ```
 
-Or use `round build` + manual agent invocation if you need tighter control (see failure modes for Codex invocation gotchas).
+The sub-agent returns text. You write it to `round_N/bluelake_out.md`.
+
+_RedForest (Codex via Bash):_
+
+**CRITICAL — file-read approach only.** Codex silently produces zero output when the prompt is passed as a shell argument via `$(cat ...)`. Always pass a short instruction telling Codex to read the file:
+
+```bash
+CLAUDECODE="" codex exec --full-auto \
+  "Read the file at $(pwd)/$SESSION/round_N/redforest_prompt.md in full, then respond to it exactly as instructed. Output ONLY delta fenced JSON blocks." \
+  > $(pwd)/$SESSION/round_N/redforest_out.md 2>&1 &
+```
+
+`CLAUDECODE=""` prevents Codex from detecting a nested Claude session. Run in background with `&`. Use the full path to `codex` if it's not in your Bash PATH.
+
+_GreenMountain (Gemini via Bash):_
+
+```bash
+gemini --yolo --output-format text \
+  -p "$(cat $(pwd)/$SESSION/round_N/greenmountain_prompt.md)" \
+  > $(pwd)/$SESSION/round_N/greenmountain_out.md 2>&1 &
+```
+
+Inline `$(cat ...)` is fine for Gemini — it handles large prompts correctly. Run in background with `&`. Use the full path to `gemini` if it's not in your Bash PATH.
+
+Wait for all three to complete before closing the round.
 
 **Close the round:**
 ```bash
