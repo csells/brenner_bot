@@ -26,7 +26,7 @@ A single LLM asked to evaluate N hypotheses will hedge every one. Three agents i
   brenner/
     RS-YYYYMMDD-<slug>/
       context.md              ← research question + background (required)
-      excerpt.md              ← Brenner transcript quotes (optional)
+      excerpt.md              ← Brenner transcript quotes (required)
       artifact.md             ← compiled output, updated after each round
       verdict.md              ← plain-language answer, written at session end
       session_state.json      ← resumable state
@@ -73,21 +73,15 @@ Then write the proposed `--question` string and a one-paragraph context summary.
 
 ---
 
-## Step 0b — Build a corpus excerpt (recommended)
+## Step 0b — Build a corpus excerpt (required)
 
 Ground the session in Brenner's actual method by searching his transcript corpus for quotes relevant to the research question. This injects his reasoning style — not just a summary of it — into the agents' context.
 
-```bash
-# Search the corpus for relevant sections
-brenner corpus search "your topic keywords" --limit 5
+Pass the excerpt to `round build` via `--excerpt-file $SESSION/excerpt.md`. The CLI enforces that this file exists before running. If it's missing, `round build` exits with exact instructions — corpus search commands, excerpt build commands, and the `touch $SESSION/excerpt.md` escape hatch if you genuinely want to skip.
 
-# Build an excerpt from the sections that look most relevant
-brenner excerpt build --sections 58,78,161 > $SESSION/excerpt.md
-```
+The excerpt is injected into all three agents' **round 1 prompts only**. Without it, agents apply the Brenner operators from description alone. With it, they apply them from example — a meaningful difference in how they reason in round 1, which shapes the hypotheses and framing that carry into subsequent rounds.
 
-The `excerpt.md` file is automatically picked up and injected into all three agents' **round 1 prompts only**. Rounds 2+ re-inject the kernel and role prompts but not the excerpt. Without it, agents apply the Brenner operators from description alone. With it, they apply them from example — there's a meaningful difference in how they reason in round 1, which shapes the hypotheses and framing that carry into subsequent rounds.
-
-**When to skip**: if the research question is purely a business/market/product decision and the biological or experimental science framing would distort rather than help. In that case, omit `excerpt.md` entirely — agents will still follow the operator algebra from the kernel.
+This applies to all research questions — scientific, technical, and business alike. The Brenner operators (theory-kill, third-alternative, scale check, Occam's Broom) are domain-agnostic; the excerpt teaches the agents *how* to apply them, not just *that* they exist.
 
 ---
 
@@ -133,7 +127,8 @@ mkdir -p $SESSION
 brenner round build \
   --session-dir $(pwd)/$SESSION \
   --round N \
-  --question "Your research question with explicit evaluation criteria"
+  --question "Your research question with explicit evaluation criteria" \
+  --excerpt-file $SESSION/excerpt.md
 ```
 
 Writes `round_N/{bluelake,redforest,greenmountain}_prompt.md`.
