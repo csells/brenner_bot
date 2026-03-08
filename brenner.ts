@@ -7392,9 +7392,9 @@ ${JSON.stringify(delta, null, 2)}
         child.stdout?.on("data", (d: Buffer) => chunks.push(d));
 
         child.on("error", (err: Error) => {
-          stderrLine(`  ⚠ ${name} failed to launch: ${err.message}`);
+          stderrLine(`  ✗ ${name} failed to launch: ${err.message}`);
           writeFileSync(outFile, "");
-          resolve("");
+          reject(new Error(`${name} agent failed to launch: ${err.message}. Check binary path.`));
         });
 
         const TIMEOUT_MS = 300_000;
