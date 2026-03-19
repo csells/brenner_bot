@@ -13,29 +13,29 @@
       "platforms": ["linux-x64", "linux-arm64", "darwin-arm64", "darwin-x64", "win-x64"]
     },
     "ntm": {
-      "version": "1.7.0",
+      "version": "1.8.0",
       "install_strategy": "upstream_installer",
-      "install_url": "https://raw.githubusercontent.com/Dicklesworthstone/ntm/v1.7.0/install.sh",
-      "install_args": "--version=v1.7.0",
+      "install_url": "https://raw.githubusercontent.com/Dicklesworthstone/ntm/v1.8.0/install.sh",
+      "install_args": "--version=v1.8.0",
       "verify_command": "ntm deps -v",
       "verify_success": "exit_code_zero",
       "platforms": ["linux-x64", "linux-arm64", "darwin-arm64", "darwin-x64"],
       "notes": "Not available on Windows (requires tmux)"
     },
     "cass": {
-      "version": "0.2.0",
+      "version": "0.2.2",
       "install_strategy": "upstream_installer",
-      "install_url": "https://raw.githubusercontent.com/Dicklesworthstone/coding_agent_session_search/v0.2.0/install.sh",
-      "install_args": "--version v0.2.0",
+      "install_url": "https://raw.githubusercontent.com/Dicklesworthstone/coding_agent_session_search/v0.2.2/install.sh",
+      "install_args": "--version v0.2.2",
       "verify_command": "cass health",
       "verify_success": "exit_code_zero",
       "platforms": ["linux-x64", "linux-arm64", "darwin-arm64", "darwin-x64", "win-x64"]
     },
     "cm": {
-      "version": "0.2.0",
+      "version": "0.2.3",
       "install_strategy": "upstream_installer",
-      "install_url": "https://raw.githubusercontent.com/Dicklesworthstone/cass_memory_system/v0.2.0/install.sh",
-      "install_args": "--version v0.2.0",
+      "install_url": "https://raw.githubusercontent.com/Dicklesworthstone/cass_memory_system/v0.2.3/install.sh",
+      "install_args": "--version v0.2.3",
       "verify_command": "cm --version",
       "verify_success": "exit_code_zero",
       "platforms": ["linux-x64", "linux-arm64", "darwin-arm64", "darwin-x64", "win-x64"]
