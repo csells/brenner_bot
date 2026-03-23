@@ -7886,6 +7886,8 @@ Example KILL:
         child.stderr?.on("data", (d: Buffer) => stderrChunks.push(d));
 
         child.on("error", (err: Error) => {
+          clearTimeout(timer);
+          if (killTimer) clearTimeout(killTimer);
           stderrLine(`  [!] ${agent.name} failed to launch: ${err.message}`);
           stderrLine(`      Binary: ${agent.bin}`);
           stderrLine(`      Ensure the CLI is installed and in PATH.`);
