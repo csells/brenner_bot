@@ -262,6 +262,7 @@ export interface MergeSuccess {
 /** Failed merge result */
 export interface MergeFailure {
   ok: false;
+  artifact: Artifact;
   errors: MergeError[];
   warnings: MergeWarning[];
   applied_count: number;
@@ -859,10 +860,11 @@ export function mergeArtifact(
   // Check post-conditions for errors
   const finalErrors: MergeError[] = [...errors];
 
-  // If there are any errors, return failure
+  // If there are any errors, return failure (with partially-updated artifact)
   if (finalErrors.length > 0) {
     return {
       ok: false,
+      artifact,
       errors: finalErrors,
       warnings,
       applied_count: appliedCount,
@@ -954,6 +956,7 @@ export function mergeArtifactWithTimestamps(
   if (errors.length > 0) {
     return {
       ok: false,
+      artifact,
       errors,
       warnings,
       applied_count: appliedCount,

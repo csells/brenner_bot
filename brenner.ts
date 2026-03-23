@@ -27,7 +27,6 @@ import { parseOperatorCards, resolveOperatorCard, type OperatorCard } from "./ap
 import {
   AGENT_ROLES,
   composeKickoffMessages,
-  getAgentRole,
   getRolePromptMarkdown,
   getTriangulatedBrennerKernelMarkdown,
   type AgentRole,
@@ -7896,13 +7895,20 @@ Example KILL:
           resolve("");
         });
 
+        let killTimer: ReturnType<typeof setTimeout> | undefined;
         const timer = setTimeout(() => {
           child.kill("SIGTERM");
           stderrLine(`  [!] ${agent.name} timed out after ${AGENT_TIMEOUT_MS / 1000}s, sending SIGTERM`);
+          // Escalate to SIGKILL if process doesn't exit within 10 seconds
+          killTimer = setTimeout(() => {
+            child.kill("SIGKILL");
+            stderrLine(`  [!] ${agent.name} did not exit after SIGTERM, sending SIGKILL`);
+          }, 10_000);
         }, AGENT_TIMEOUT_MS);
 
         child.on("close", (code: number | null) => {
           clearTimeout(timer);
+          if (killTimer) clearTimeout(killTimer);
 
           const stdout = Buffer.concat(stdoutChunks).toString();
           const output = agent.readOutput(stdout, outFile);
@@ -7969,7 +7975,8 @@ Example KILL:
         .filter((h: any) => !h.killed).length;
 
       // Convergence: kills >= adds (adversarial pressure exceeds generation)
-      if (kills >= adds) {
+      // Require at least one kill to avoid premature convergence on pure-EDIT rounds
+      if (kills > 0 && kills >= adds) {
         return {
           converged: true,
           reason: `Kill-rate (${kills}) >= add-rate (${adds}), ${activeHypotheses} active hypotheses remain`,
@@ -8084,16 +8091,14 @@ Example KILL:
       // Merge deltas into artifact
       const mergeResult = mergeArtifactWithTimestamps(artifact, allRoundDeltas);
       let mergeErrors = 0;
-      if (mergeResult.ok) {
-        artifact = mergeResult.artifact;
-      } else {
+      // Always use the (possibly partially-updated) artifact from merge
+      artifact = mergeResult.artifact;
+      if (!mergeResult.ok) {
         mergeErrors = mergeResult.errors.length;
-        stderrLine(`  Merge: ${mergeErrors} errors`);
+        stderrLine(`  Merge: ${mergeErrors} errors (${mergeResult.applied_count} deltas applied successfully)`);
         for (const err of mergeResult.errors.slice(0, 5)) {
           stderrLine(`    - ${err.message}`);
         }
-        // On failure the artifact is not updated — continue with what we have
-        // The applied deltas count is still tracked for convergence detection
       }
 
       // Lint the artifact
