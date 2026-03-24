@@ -7712,7 +7712,7 @@ ${JSON.stringify(delta, null, 2)}
         bin: geminiBin,
         role: ROLE_CONFIGS.gemini,
         buildArgs: (prompt: string, _outFile: string) => [
-          "--sandbox", "--output-format", "text", "-p", prompt,
+          "--yolo", "--output-format", "text", "-p", prompt,
         ],
         buildEnv: () => ({
           ...process.env,
@@ -8232,7 +8232,7 @@ Example KILL:
         role: AGENT_ROLES["Gemini"] ?? AGENT_ROLES["gemini-cli"],
         bin: geminiBin,
         buildArgs: (prompt: string) => [
-          "--sandbox", "--output-format", "text", "-p", prompt,
+          "--yolo", "--output-format", "text", "-p", prompt,
         ],
         buildEnv: () => ({
           ...process.env,
